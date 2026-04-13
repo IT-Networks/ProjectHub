@@ -38,7 +38,7 @@ CURRENT_VERSION = "1.0.0"  # Fallback
 # Update-Konfiguration (kann über config.py erweitert werden)
 UPDATE_CONFIG = {
     "enabled": True,
-    "repo_url": "",  # z.B. "Markus-Dev96/ProjectHub"
+    "repo_url": "IT-Networks/ProjectHub",
     "branch": "main",
     "github_token": "",
     "timeout_seconds": 60,
