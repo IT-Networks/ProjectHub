@@ -27,7 +27,12 @@ export function useOfflineMonitor() {
 
   // Initial check
   useEffect(() => {
-    fetch('/api/settings/ai-assist-status')
+    // Use absolute URL to backend on port 3001
+    const apiUrl = typeof window !== 'undefined' && window.location.port === '3000'
+      ? 'http://localhost:3001/api/settings/ai-assist-status'
+      : '/api/settings/ai-assist-status'
+
+    fetch(apiUrl)
       .then((r) => r.json())
       .then((d) => setAiAssistConnected(d.connected))
       .catch(() => setAiAssistConnected(false))

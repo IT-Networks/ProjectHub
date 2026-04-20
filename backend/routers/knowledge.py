@@ -980,6 +980,9 @@ async def import_note(
         category="reference",
         source_type="note_import",
         source_ref=note.id,
+        source_note_id=note.id,  # Link to source note for bidirectional sync
+        sync_status="synced",
+        last_synced_at=_now(),
         tags=json.dumps(tags),
         confidence="high",
         extra_data=json.dumps({"imported_from": "note", "note_id": note.id}),
@@ -987,6 +990,14 @@ async def import_note(
     db.add(item)
     await db.commit()
     await db.refresh(item)
+
+    # Add knowledge item ID to note's linked_knowledge_ids
+    linked_ids = json.loads(note.linked_knowledge_ids) if note.linked_knowledge_ids else []
+    if item.id not in linked_ids:
+        linked_ids.append(item.id)
+        note.linked_knowledge_ids = json.dumps(linked_ids)
+        await db.commit()
+
     await _fts_insert(db, item)
     await _auto_link_by_tags(db, project_id, item)
 

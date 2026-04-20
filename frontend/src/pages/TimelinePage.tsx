@@ -4,6 +4,7 @@ import { useTodoStore } from '@/stores/todoStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
+import { EmptyState } from '@/components/shared/EmptyState'
 import { STATUS_LABELS, PRIORITY_LABELS } from '@/lib/types'
 import type { Todo } from '@/lib/types'
 
@@ -126,10 +127,12 @@ export function TimelinePage() {
       </div>
 
       {ganttData.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border p-12 text-center text-muted-foreground">
-          <p className="text-lg">Keine Todos mit Fristen</p>
-          <p className="mt-2 text-sm">Erstelle Todos mit einer Frist, um sie hier als Timeline zu sehen.</p>
-        </div>
+        <EmptyState
+          icon="📅"
+          title="Keine Todos mit Fristen"
+          description="Erstelle Todos mit einer Frist oder setze eine Frist für bestehende Todos, um sie hier als Timeline zu sehen."
+          size="spacious"
+        />
       ) : (
         <div style={{ height: Math.max(300, ganttData.length * 40 + 60) }}>
           <ResponsiveContainer width="100%" height="100%">

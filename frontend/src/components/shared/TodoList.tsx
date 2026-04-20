@@ -1,30 +1,70 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useTodoStore } from '@/stores/todoStore'
+import { useBulkSelectionStore } from '@/stores/bulkSelectionStore'
+import { useToast } from '@/components/shared/Toast'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Checkbox } from '@/components/shared/Checkbox'
+import { BatchActionsToolbar } from '@/components/shared/BatchActionsToolbar'
 import { STATUS_LABELS, PRIORITY_LABELS } from '@/lib/types'
-import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
+import type { Todo } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { Trash2 } from 'lucide-react'
 
 interface Props {
   projectId: string
+  enableBulkSelect?: boolean
 }
 
-export function TodoList({ projectId }: Props) {
+export function TodoList({ projectId, enableBulkSelect = true }: Props) {
   const todos = useTodoStore((s) => s.todos)
   const fetchTodos = useTodoStore((s) => s.fetchTodos)
   const createTodo = useTodoStore((s) => s.createTodo)
   const updateStatus = useTodoStore((s) => s.updateStatus)
   const deleteTodo = useTodoStore((s) => s.deleteTodo)
+  const { success, error } = useToast()
+  const {
+    isSelectMode,
+    toggleItem,
+    deselectAll,
+    isSelected,
+    getSelectedIds,
+    getSelectedCount,
+  } = useBulkSelectionStore()
+
   const [createOpen, setCreateOpen] = useState(false)
-  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [form, setForm] = useState({ title: '', description: '', priority: 'medium', deadline: '' })
+  const [visibleTodos, setVisibleTodos] = useState<string[]>([])
+  const [deletedTodoBackup, setDeletedTodoBackup] = useState<{ id: string; todo: Todo } | null>(null)
 
   const projectTodos = useMemo(() => todos.filter((t) => t.project_id === projectId), [todos, projectId])
+  const displayTodos = useMemo(() => projectTodos.filter((t) => !visibleTodos.includes(t.id) || t.id === deletedTodoBackup?.id), [projectTodos, visibleTodos, deletedTodoBackup])
+
+  const handleBatchDelete = async () => {
+    const selectedCount = getSelectedCount()
+    if (selectedCount === 0) return
+
+    const confirmed = window.confirm(
+      `Wirklich ${selectedCount} Todo(s) löschen?`
+    )
+    if (!confirmed) return
+
+    try {
+      const ids = getSelectedIds()
+      for (const id of ids) {
+        await deleteTodo(id)
+      }
+      success(`${selectedCount} Todo(s) gelöscht!`)
+      deselectAll()
+      await fetchTodos(projectId)
+    } catch (err) {
+      error(`Fehler beim Löschen: ${err instanceof Error ? err.message : 'Unbekannter Fehler'}`)
+    }
+  }
 
   useEffect(() => {
     fetchTodos(projectId)
@@ -44,6 +84,40 @@ export function TodoList({ projectId }: Props) {
     await fetchTodos(projectId)
   }
 
+  const handleDelete = async (todoId: string) => {
+    const todoToDelete = projectTodos.find((t) => t.id === todoId)
+    if (!todoToDelete) return
+
+    // Optimistic delete - remove from UI immediately
+    setDeletedTodoBackup({ id: todoId, todo: todoToDelete })
+    setVisibleTodos((prev) => [...prev, todoId])
+
+    // Show undo toast
+    success('Todo gelöscht', {
+      action: {
+        label: 'Rückgängig',
+        onClick: () => {
+          setVisibleTodos((prev) => prev.filter((id) => id !== todoId))
+          setDeletedTodoBackup(null)
+        },
+      },
+      duration: 5000,
+    })
+
+    // Actually delete after a short delay (gives user time to undo)
+    setTimeout(async () => {
+      try {
+        await deleteTodo(todoId)
+        setDeletedTodoBackup(null)
+      } catch (err) {
+        // Restore on error
+        setVisibleTodos((prev) => prev.filter((id) => id !== todoId))
+        setDeletedTodoBackup(null)
+        error('Fehler beim Löschen des Todos')
+      }
+    }, 5000)
+  }
+
   const statusColors: Record<string, string> = {
     backlog: 'bg-muted',
     in_progress: 'bg-blue-500/20 text-blue-400',
@@ -58,16 +132,61 @@ export function TodoList({ projectId }: Props) {
         <Button size="sm" onClick={() => setCreateOpen(true)}>+ Todo</Button>
       </div>
 
+      {enableBulkSelect && isSelectMode && (
+        <BatchActionsToolbar
+          selectedCount={getSelectedCount()}
+          totalCount={projectTodos.length}
+          onClearSelection={deselectAll}
+          actions={[
+            {
+              id: 'delete',
+              label: `Löschen (${getSelectedCount()})`,
+              icon: <Trash2 className="h-4 w-4" />,
+              onClick: handleBatchDelete,
+              variant: 'destructive',
+              disabled: getSelectedCount() === 0,
+            },
+          ]}
+          compact
+          className="mb-4"
+        />
+      )}
+
       <div className="space-y-2">
-        {projectTodos.map((todo) => {
+        {displayTodos.map((todo) => {
           const isOverdue = todo.deadline && new Date(todo.deadline) < new Date()
+          const itemSelected = enableBulkSelect && isSelectMode && isSelected(todo.id)
+
           return (
-            <div key={todo.id} className="flex items-center gap-3 rounded-lg border border-border p-3">
-              {/* Quick-Status Toggle */}
+            <div
+              key={todo.id}
+              className={`flex items-start gap-3 rounded-lg border p-3 transition-colors ${
+                itemSelected ? 'border-primary bg-primary/5' : 'border-border'
+              }`}
+              onClick={() => {
+                if (enableBulkSelect && isSelectMode) {
+                  toggleItem(todo.id)
+                }
+              }}
+            >
+              {enableBulkSelect && isSelectMode && (
+                <Checkbox
+                  checked={itemSelected}
+                  onChange={(checked) => {
+                    if (checked) {
+                      toggleItem(todo.id)
+                    } else {
+                      toggleItem(todo.id)
+                    }
+                  }}
+                  className="flex-shrink-0 mt-1"
+                  ariaLabel={`Select ${todo.title}`}
+                />
+              )}
               <button
                 onClick={() => updateStatus(todo.id, todo.status === 'done' ? 'backlog' : 'done').then(() => fetchTodos(projectId))}
                 className={cn(
-                  'h-5 w-5 shrink-0 rounded border-2 transition-colors',
+                  'h-5 w-5 shrink-0 rounded border-2 transition-colors mt-0.5',
                   todo.status === 'done' ? 'border-green-500 bg-green-500' : 'border-muted-foreground'
                 )}
               />
@@ -79,7 +198,7 @@ export function TodoList({ projectId }: Props) {
                   <p className="mt-0.5 text-xs text-muted-foreground line-clamp-1">{todo.description}</p>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-shrink-0">
                 <Badge variant="outline" className={cn('text-xs', statusColors[todo.status])}>
                   {STATUS_LABELS[todo.status]}
                 </Badge>
@@ -93,7 +212,7 @@ export function TodoList({ projectId }: Props) {
                 )}
                 <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-red-400"
                   aria-label="Todo löschen"
-                  onClick={() => setDeletingId(todo.id)}
+                  onClick={() => handleDelete(todo.id)}
                 >
                   x
                 </Button>
@@ -101,7 +220,7 @@ export function TodoList({ projectId }: Props) {
             </div>
           )
         })}
-        {projectTodos.length === 0 && (
+        {displayTodos.length === 0 && projectTodos.length === 0 && (
           <p className="py-8 text-center text-sm text-muted-foreground">Noch keine Todos</p>
         )}
       </div>
@@ -143,19 +262,6 @@ export function TodoList({ projectId }: Props) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Delete Confirmation */}
-      <ConfirmDialog
-        open={!!deletingId}
-        onOpenChange={() => setDeletingId(null)}
-        title="Todo löschen"
-        description="Dieses Todo wird unwiderruflich gelöscht."
-        confirmLabel="Löschen"
-        onConfirm={() => {
-          if (deletingId) deleteTodo(deletingId).then(() => fetchTodos(projectId))
-          setDeletingId(null)
-        }}
-      />
     </div>
   )
 }

@@ -1,4 +1,5 @@
 import { useLocation } from 'react-router-dom'
+import { Sun, Moon, Search } from 'lucide-react'
 import { useOfflineStore } from '@/hooks/useOffline'
 import { useSSEStore } from '@/hooks/useSSE'
 import { useThemeStore } from '@/stores/themeStore'
@@ -35,6 +36,7 @@ export function TopBar() {
           onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))}
           className="flex cursor-pointer items-center gap-2 rounded-md border border-input bg-muted/50 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted"
         >
+          <Search className="w-4 h-4" />
           <span>Suche...</span>
           <kbd className="rounded border border-border bg-background px-1.5 py-0.5 text-xs">
             Ctrl+K
@@ -49,7 +51,7 @@ export function TopBar() {
           className="h-8 w-8 p-0"
           aria-label={theme === 'dark' ? 'Zum hellen Modus wechseln' : 'Zum dunklen Modus wechseln'}
         >
-          {theme === 'dark' ? '☀' : '☾'}
+          {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
         </Button>
 
         {/* SSE Connection */}

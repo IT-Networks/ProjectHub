@@ -28,6 +28,12 @@ class KnowledgeItem(Base):
     confidence: Mapped[str] = mapped_column(String(10), default="medium")  # high, medium, low
     extra_data: Mapped[str] = mapped_column(Text, default="{}")  # JSON blob
     is_pinned: Mapped[bool] = mapped_column(Integer, default=0)
+    # Bidirectional sync fields
+    source_note_id: Mapped[str | None] = mapped_column(
+        ForeignKey("notes.id", ondelete="SET NULL"), nullable=True, default=None
+    )
+    sync_status: Mapped[str] = mapped_column(String(20), default="synced")  # synced, pending, conflict
+    last_synced_at: Mapped[str | None] = mapped_column(String(30), nullable=True, default=None)
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now)
 

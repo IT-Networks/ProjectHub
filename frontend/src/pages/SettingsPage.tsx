@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { useToast } from '@/components/shared/Toast'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -30,6 +31,7 @@ interface UpdateResult {
 }
 
 export function SettingsPage() {
+  const { success, error } = useToast()
   const [status, setStatus] = useState<AiAssistStatus | null>(null)
   const [testing, setTesting] = useState(false)
   const [version, setVersion] = useState<string>('')
@@ -43,8 +45,10 @@ export function SettingsPage() {
     try {
       const data = await api.get<AiAssistStatus>('/settings/ai-assist-status')
       setStatus(data)
-    } catch {
+      success(data.connected ? 'Verbindung erfolgreich!' : 'AI-Assist nicht erreichbar')
+    } catch (err) {
       setStatus({ connected: false, base_url: 'http://localhost:8000', sse_subscribers: 0 })
+      error('Fehler beim Testen der Verbindung')
     }
     setTesting(false)
   }
@@ -64,8 +68,14 @@ export function SettingsPage() {
     try {
       const data = await api.get<UpdateCheck>('/update/check')
       setUpdateCheck(data)
+      if (data.available) {
+        success(`Update verfügbar: ${data.latest_version}`)
+      } else {
+        success('Anwendung ist aktuell')
+      }
     } catch (e) {
       setUpdateCheck({ available: false, current_version: version, error: (e as Error).message })
+      error('Fehler beim Prüfen von Updates')
     }
     setChecking(false)
   }
@@ -81,11 +91,15 @@ export function SettingsPage() {
       })
       setUpdateResult(data)
       if (data.success) {
+        success('Update erfolgreich installiert!')
         fetchVersion()
         setUpdateCheck(null)
+      } else {
+        error(`Update fehlgeschlagen: ${data.error}`)
       }
     } catch (e) {
       setUpdateResult({ success: false, error: (e as Error).message })
+      error('Fehler beim Installieren des Updates')
     }
     setInstalling(false)
   }

@@ -70,6 +70,7 @@ from routers.chat import router as chat_router  # noqa: E402
 from routers.search import router as search_router  # noqa: E402
 from routers.activity import router as activity_router  # noqa: E402
 from routers.knowledge import router as knowledge_router  # noqa: E402
+from routers.sync import router as sync_router  # noqa: E402
 from routers.update import router as update_router  # noqa: E402
 
 app.include_router(projects_router)
@@ -85,6 +86,7 @@ app.include_router(todo_queue_router)
 app.include_router(chat_router)
 app.include_router(search_router)
 app.include_router(activity_router)
+app.include_router(sync_router)
 app.include_router(knowledge_router)
 app.include_router(update_router)
 
@@ -104,4 +106,11 @@ if frontend_dist.exists():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host=settings.host, port=settings.port, reload=True)
+    uvicorn.run(
+        app,
+        host=settings.host,
+        port=settings.port,
+        reload=False,
+        access_log=True,
+        log_level="info",
+    )

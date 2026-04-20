@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { TopBar } from '@/components/layout/TopBar'
 import { DashboardPage } from '@/pages/DashboardPage'
@@ -15,12 +15,15 @@ import { useSSEConnection } from '@/hooks/useSSE'
 import { useOfflineMonitor, useIsOffline } from '@/hooks/useOffline'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboard'
 import { CommandPalette } from '@/components/layout/CommandPalette'
+import { KeyboardShortcutsHelp } from '@/components/shared/KeyboardShortcutsHelp'
 import { useThemeStore } from '@/stores/themeStore'
+import { SuccessAnimation } from '@/components/shared/SuccessAnimation'
 
 function AppLayout() {
   const fetchProjects = useProjectStore((s) => s.fetchProjects)
   const isOffline = useIsOffline()
   const theme = useThemeStore((s) => s.theme)
+  const [showSuccess, setShowSuccess] = useState(false)
 
   // Initialize SSE, offline monitoring, and keyboard shortcuts
   useSSEConnection()
@@ -34,6 +37,7 @@ function AppLayout() {
   return (
     <div className={`${theme} flex h-screen bg-background text-foreground`}>
       <CommandPalette />
+      <KeyboardShortcutsHelp />
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <TopBar />
@@ -42,10 +46,15 @@ function AppLayout() {
             Offline — AI-Assist nicht erreichbar. Lokale Daten verfügbar.
           </div>
         )}
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto animate-in fade-in duration-150">
           <Outlet />
         </main>
       </div>
+      <SuccessAnimation
+        show={showSuccess}
+        type="checkmark"
+        onComplete={() => setShowSuccess(false)}
+      />
     </div>
   )
 }

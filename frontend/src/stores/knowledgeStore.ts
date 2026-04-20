@@ -46,6 +46,8 @@ interface KnowledgeStore {
   suggestLinks: (projectId: string, itemId: string) => Promise<SuggestedEdge[]>
   importNote: (projectId: string, noteId: string) => Promise<KnowledgeItem>
   importResearch: (projectId: string, researchId: string) => Promise<KnowledgeItem>
+  syncNoteToKnowledge: (projectId: string, noteId: string, content: string, title: string) => Promise<void>
+  syncKnowledgeToNote: (projectId: string, itemId: string) => Promise<void>
 
   setSelectedItem: (id: string | null) => void
   setViewMode: (mode: ViewMode) => void
@@ -195,6 +197,32 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => ({
     const item = await api.post<KnowledgeItem>(`/knowledge/${projectId}/import/research`, { research_id: researchId })
     set((s) => ({ items: [item, ...s.items] }))
     return item
+  },
+
+  syncNoteToKnowledge: async (projectId, noteId, content, title) => {
+    // Update all knowledge items linked to this note
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.source_note_id === noteId
+          ? { ...i, content, title, sync_status: 'synced', last_synced_at: new Date().toISOString() }
+          : i
+      ),
+    }))
+    await api.post(`/sync/note-to-knowledge`, { project_id: projectId, note_id: noteId, content, title })
+  },
+
+  syncKnowledgeToNote: async (projectId, itemId) => {
+    // Get the knowledge item and sync back to note
+    const item = get().items.find((i) => i.id === itemId)
+    if (item?.source_note_id) {
+      await api.post(`/sync/knowledge-to-note`, { project_id: projectId, item_id: itemId })
+      // Update item sync status
+      set((s) => ({
+        items: s.items.map((i) =>
+          i.id === itemId ? { ...i, sync_status: 'synced', last_synced_at: new Date().toISOString() } : i
+        ),
+      }))
+    }
   },
 
   setSelectedItem: (id) => set({ selectedItemId: id, selectedItemDetail: id ? get().selectedItemDetail : null }),

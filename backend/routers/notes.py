@@ -49,6 +49,7 @@ class NoteResponse(BaseModel):
     is_pinned: bool
     tags: list[str]
     sort_order: int
+    linked_knowledge_ids: list[str]
     created_at: str
     updated_at: str
 
@@ -64,6 +65,7 @@ def _to_response(n: Note) -> NoteResponse:
         is_pinned=bool(n.is_pinned),
         tags=json.loads(n.tags) if n.tags else [],
         sort_order=n.sort_order,
+        linked_knowledge_ids=json.loads(n.linked_knowledge_ids) if n.linked_knowledge_ids else [],
         created_at=n.created_at,
         updated_at=n.updated_at,
     )
@@ -156,6 +158,36 @@ async def toggle_pin(note_id: str, db: AsyncSession = Depends(get_db)) -> NoteRe
         raise HTTPException(404, "Notiz nicht gefunden")
 
     note.is_pinned = 0 if note.is_pinned else 1
+    note.updated_at = _now()
+    await db.commit()
+    await db.refresh(note)
+    return _to_response(note)
+
+
+class LinkedKnowledgeRequest(BaseModel):
+    knowledge_id: str
+    remove: bool = False
+
+
+@router.patch("/{note_id}/link-knowledge")
+async def manage_linked_knowledge(
+    note_id: str, data: LinkedKnowledgeRequest, db: AsyncSession = Depends(get_db)
+) -> NoteResponse:
+    result = await db.execute(select(Note).where(Note.id == note_id))
+    note = result.scalar_one_or_none()
+    if not note:
+        raise HTTPException(404, "Notiz nicht gefunden")
+
+    linked_ids = json.loads(note.linked_knowledge_ids) if note.linked_knowledge_ids else []
+
+    if data.remove:
+        if data.knowledge_id in linked_ids:
+            linked_ids.remove(data.knowledge_id)
+    else:
+        if data.knowledge_id not in linked_ids:
+            linked_ids.append(data.knowledge_id)
+
+    note.linked_knowledge_ids = json.dumps(linked_ids)
     note.updated_at = _now()
     await db.commit()
     await db.refresh(note)

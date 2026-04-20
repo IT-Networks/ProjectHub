@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Plus } from 'lucide-react'
 import {
   DndContext,
   closestCenter,
@@ -21,6 +22,8 @@ import { KnowledgeWidget } from './KnowledgeWidget'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { WidgetSkeleton } from '@/components/shared/Skeleton'
 import type { WidgetConfig } from '@/lib/types'
 
 const WIDGET_TYPES: Record<string, { label: string; defaultWidth: number; defaultHeight: number }> = {
@@ -96,28 +99,52 @@ export function WidgetGrid() {
     // Simple reorder — could implement full grid repositioning later
   }
 
+  const visibleWidgets = widgets.filter((w) => w.is_visible)
+  const isLoading = !widgets.length && !visibleWidgets.length
+
   return (
     <div>
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <SortableContext items={widgets.map((w) => w.id)} strategy={rectSortingStrategy}>
-          <div className="grid grid-cols-4 gap-4 auto-rows-[minmax(160px,auto)]">
-            {widgets.filter((w) => w.is_visible).map((widget) => (
-              <WidgetWrapper
-                key={widget.id}
-                widget={widget}
-                title={widgetTitle(widget)}
-                onRemove={() => removeWidget(widget.id)}
-              >
-                {renderWidget(widget)}
-              </WidgetWrapper>
-            ))}
-          </div>
-        </SortableContext>
-      </DndContext>
+      {isLoading ? (
+        // Show skeleton loaders while fetching
+        <div className="grid grid-cols-4 gap-4 auto-rows-[minmax(160px,auto)]">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <WidgetSkeleton key={i} />
+          ))}
+        </div>
+      ) : visibleWidgets.length === 0 ? (
+        // Show empty state when no widgets
+        <div className="rounded-lg border-2 border-dashed border-muted-foreground/20 bg-muted/5">
+          <EmptyState
+            icon="📊"
+            title="Keine Widgets konfiguriert"
+            description="Passe dein Dashboard an, indem du Widgets hinzufügst. Zeige Todos, Projekte, Builds, und mehr auf einen Blick."
+            action={<Button onClick={() => setAddOpen(true)} icon={<Plus className="w-4 h-4" />}>Widget hinzufügen</Button>}
+            size="spacious"
+          />
+        </div>
+      ) : (
+        // Show widgets in grid
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={visibleWidgets.map((w) => w.id)} strategy={rectSortingStrategy}>
+            <div className="grid grid-cols-4 gap-4 auto-rows-[minmax(160px,auto)]">
+              {visibleWidgets.map((widget) => (
+                <WidgetWrapper
+                  key={widget.id}
+                  widget={widget}
+                  title={widgetTitle(widget)}
+                  onRemove={() => removeWidget(widget.id)}
+                >
+                  {renderWidget(widget)}
+                </WidgetWrapper>
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      )}
 
-      <div className="mt-4">
-        <Button variant="outline" onClick={() => setAddOpen(true)}>
-          + Widget hinzufügen
+      <div className="mt-6">
+        <Button variant="outline" onClick={() => setAddOpen(true)} icon={<Plus className="w-4 h-4" />}>
+          Widget hinzufügen
         </Button>
       </div>
 

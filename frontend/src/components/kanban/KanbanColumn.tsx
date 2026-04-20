@@ -1,6 +1,7 @@
 import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { KanbanCard } from './KanbanCard'
+import { EmptyStateCompact } from '@/components/shared/EmptyState'
 import { STATUS_LABELS } from '@/lib/types'
 import type { Todo, TodoStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -45,9 +46,10 @@ export function KanbanColumn({ status, todos, wipLimit }: Props) {
         </SortableContext>
 
         {todos.length === 0 && (
-          <div className="py-8 text-center text-xs text-muted-foreground">
-            Keine Todos
-          </div>
+          <EmptyStateCompact
+            icon="📭"
+            title="Keine Todos"
+          />
         )}
       </div>
     </div>

@@ -35,6 +35,36 @@ async def init_db():
         except Exception:
             pass  # Column already exists
 
+        # Migrate: add sync fields to notes
+        try:
+            await conn.execute(
+                __import__("sqlalchemy").text("ALTER TABLE notes ADD COLUMN linked_knowledge_ids TEXT DEFAULT '[]'")
+            )
+        except Exception:
+            pass  # Column already exists
+
+        # Migrate: add sync fields to knowledge_items
+        try:
+            await conn.execute(
+                __import__("sqlalchemy").text("ALTER TABLE knowledge_items ADD COLUMN source_note_id TEXT")
+            )
+        except Exception:
+            pass  # Column already exists
+
+        try:
+            await conn.execute(
+                __import__("sqlalchemy").text("ALTER TABLE knowledge_items ADD COLUMN sync_status TEXT DEFAULT 'synced'")
+            )
+        except Exception:
+            pass  # Column already exists
+
+        try:
+            await conn.execute(
+                __import__("sqlalchemy").text("ALTER TABLE knowledge_items ADD COLUMN last_synced_at TEXT")
+            )
+        except Exception:
+            pass  # Column already exists
+
 
 async def get_db() -> AsyncSession:
     """Dependency for FastAPI routes."""

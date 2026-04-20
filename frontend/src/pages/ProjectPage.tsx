@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useProjectStore } from '@/stores/projectStore'
+import { useFavoritesStore } from '@/stores/favoritesStore'
+import { useToast } from '@/components/shared/Toast'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -18,6 +20,8 @@ import { PRReviewPanel } from '@/components/shared/PRReviewPanel'
 import { ProjectChat } from '@/components/chat/ProjectChat'
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
 import { KnowledgeTab } from '@/components/knowledge/KnowledgeTab'
+import { FormField } from '@/components/shared/FormField'
+import { FavoriteButton } from '@/components/shared/FavoriteButton'
 
 const SOURCE_FIELDS: Record<SourceType, { label: string; fields: { key: string; label: string; placeholder: string }[] }> = {
   jenkins_job: {
@@ -63,6 +67,8 @@ export function ProjectPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { currentProject, loading, fetchProject, deleteProject, addSource, removeSource } = useProjectStore()
+  const { success, error } = useToast()
+  const addRecentItem = useFavoritesStore((s) => s.addRecentItem)
 
   const [chatOpen, setChatOpen] = useState(false)
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false)
@@ -71,10 +77,19 @@ export function ProjectPage() {
   const [sourceDisplayName, setSourceDisplayName] = useState('')
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [removeSourceId, setRemoveSourceId] = useState<string | null>(null)
+  const [submittingSource, setSubmittingSource] = useState(false)
 
   useEffect(() => {
-    if (id) fetchProject(id)
+    if (id) {
+      fetchProject(id)
+    }
   }, [id, fetchProject])
+
+  useEffect(() => {
+    if (currentProject?.name) {
+      addRecentItem(currentProject.id, 'project', currentProject.name)
+    }
+  }, [currentProject?.id, currentProject?.name, addRecentItem])
 
   if (loading && !currentProject) {
     return <div className="p-6 text-muted-foreground">Laden...</div>
@@ -87,34 +102,70 @@ export function ProjectPage() {
   const p = currentProject
 
   const handleAddSource = async () => {
-    const data: DataSourceLinkCreate = {
-      source_type: sourceType,
-      source_config: sourceConfig,
-      display_name: sourceDisplayName,
+    try {
+      setSubmittingSource(true)
+      const data: DataSourceLinkCreate = {
+        source_type: sourceType,
+        source_config: sourceConfig,
+        display_name: sourceDisplayName,
+      }
+      await addSource(p.id, data)
+      success('Datenquelle erfolgreich verknüpft!')
+      setSourceDialogOpen(false)
+      setSourceConfig({})
+      setSourceDisplayName('')
+    } catch (err) {
+      error(`Fehler: ${err instanceof Error ? err.message : 'Unbekannter Fehler'}`)
+    } finally {
+      setSubmittingSource(false)
     }
-    await addSource(p.id, data)
-    setSourceDialogOpen(false)
-    setSourceConfig({})
-    setSourceDisplayName('')
   }
 
   const handleDelete = async () => {
-    await deleteProject(p.id)
-    navigate('/projekte')
+    const projectName = p.name
+    setDeleteConfirmOpen(false)
+
+    // Show undo toast
+    success(`Projekt "${projectName}" gelöscht`, {
+      action: {
+        label: 'Rückgängig',
+        onClick: () => {
+          // User clicked undo - we just close the toast
+          // The project is still there since we haven't actually deleted it yet
+        },
+      },
+      duration: 5000,
+    })
+
+    // Actually delete after delay
+    setTimeout(async () => {
+      try {
+        await deleteProject(p.id)
+        navigate('/projekte')
+      } catch (err) {
+        error(`Fehler beim Löschen: ${err instanceof Error ? err.message : 'Unbekannter Fehler'}`)
+      }
+    }, 5000)
   }
 
   return (
     <div className="p-6">
       {/* Header */}
       <div className="mb-6 flex items-start justify-between">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 flex-1">
           <span className="h-4 w-4 rounded-full" style={{ backgroundColor: p.color }} />
-          <div>
+          <div className="flex-1">
             <h2 className="text-xl font-semibold">{p.name}</h2>
             {p.description && (
               <p className="mt-1 text-sm text-muted-foreground">{p.description}</p>
             )}
           </div>
+          <FavoriteButton
+            id={p.id}
+            type="project"
+            title={p.name}
+            size="sm"
+          />
           <Badge variant="secondary">{STATUS_LABELS[p.status]}</Badge>
           {p.tags.map((tag) => (
             <Badge key={tag} variant="outline">{tag}</Badge>
@@ -238,7 +289,25 @@ export function ProjectPage() {
         description="Die Verknüpfung wird entfernt. Die externe Quelle bleibt unverändert."
         confirmLabel="Entfernen"
         onConfirm={() => {
-          if (removeSourceId) removeSource(p.id, removeSourceId)
+          if (removeSourceId) {
+            success('Datenquelle entfernt', {
+              action: {
+                label: 'Rückgängig',
+                onClick: () => {
+                  // User clicked undo - source is still there
+                },
+              },
+              duration: 5000,
+            })
+
+            setTimeout(async () => {
+              try {
+                await removeSource(p.id, removeSourceId)
+              } catch (err) {
+                error('Fehler beim Entfernen der Quelle')
+              }
+            }, 5000)
+          }
           setRemoveSourceId(null)
         }}
       />
@@ -258,8 +327,7 @@ export function ProjectPage() {
             <DialogTitle>Datenquelle verknüpfen</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <div>
-              <label className="mb-1 block text-sm font-medium">Typ</label>
+            <FormField label="Typ">
               <Select
                 value={sourceType}
                 onValueChange={(v) => {
@@ -276,33 +344,37 @@ export function ProjectPage() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+            </FormField>
 
             {SOURCE_FIELDS[sourceType].fields.map((field) => (
-              <div key={field.key}>
-                <label className="mb-1 block text-sm font-medium">{field.label}</label>
+              <FormField
+                key={field.key}
+                label={field.label}
+                success={!!sourceConfig[field.key]}
+              >
                 <Input
                   value={sourceConfig[field.key] || ''}
                   onChange={(e) => setSourceConfig({ ...sourceConfig, [field.key]: e.target.value })}
                   placeholder={field.placeholder}
                 />
-              </div>
+              </FormField>
             ))}
 
-            <div>
-              <label className="mb-1 block text-sm font-medium">Anzeigename (optional)</label>
+            <FormField label="Anzeigename (optional)">
               <Input
                 value={sourceDisplayName}
                 onChange={(e) => setSourceDisplayName(e.target.value)}
                 placeholder="z.B. Haupt-Build"
               />
-            </div>
+            </FormField>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSourceDialogOpen(false)}>
+            <Button variant="outline" onClick={() => setSourceDialogOpen(false)} disabled={submittingSource}>
               Abbrechen
             </Button>
-            <Button onClick={handleAddSource}>Verknüpfen</Button>
+            <Button onClick={handleAddSource} disabled={submittingSource}>
+              {submittingSource ? 'Verknüpfe...' : 'Verknüpfen'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

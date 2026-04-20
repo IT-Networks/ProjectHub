@@ -47,6 +47,15 @@ export function NodeDetailPanel({ projectId, onEdit, onClose }: NodeDetailPanelP
     fetchItemDetail(projectId, id)
   }
 
+  const handleSyncKnowledgeToNote = async () => {
+    try {
+      const syncKnowledgeToNote = useKnowledgeStore.getState().syncKnowledgeToNote
+      await syncKnowledgeToNote(projectId, item.id)
+    } catch (err) {
+      console.error('Sync failed:', err)
+    }
+  }
+
   return (
     <div className="w-80 shrink-0 overflow-y-auto rounded-lg border border-border bg-card p-4">
       {/* Header */}
@@ -88,11 +97,10 @@ export function NodeDetailPanel({ projectId, onEdit, onClose }: NodeDetailPanelP
         </div>
       )}
 
-      {/* Content Preview */}
-      {item.content_plain && (
-        <div className="mb-4 rounded bg-muted/50 p-2 text-xs text-muted-foreground">
-          {item.content_plain.slice(0, 400)}
-          {item.content_plain.length > 400 && '...'}
+      {/* Content */}
+      {item.content && (
+        <div className="tiptap mb-4 max-h-[400px] overflow-y-auto rounded bg-muted/30 p-3 text-xs text-muted-foreground">
+          <div dangerouslySetInnerHTML={{ __html: item.content }} />
         </div>
       )}
 
@@ -150,14 +158,35 @@ export function NodeDetailPanel({ projectId, onEdit, onClose }: NodeDetailPanelP
         <SuggestedLinksPanel projectId={projectId} itemId={item.id} />
       </div>
 
+      {/* Sync Status */}
+      {item.source_note_id ? (
+        <div className="mb-4 flex items-center gap-2 rounded bg-blue-500/10 p-2">
+          <span className="text-xs font-medium text-blue-400">
+            {(item.sync_status ?? 'synced') === 'synced' ? '✓ Synchronisiert' : '⏳ Ausstehend'}
+          </span>
+          {item.last_synced_at && (
+            <span className="text-[10px] text-muted-foreground">
+              {new Date(item.last_synced_at).toLocaleDateString('de-DE')}
+            </span>
+          )}
+        </div>
+      ) : null}
+
       {/* Actions */}
-      <div className="flex gap-2">
-        <Button variant="outline" size="sm" className="flex-1" onClick={() => onEdit(item.id)}>
-          Bearbeiten
-        </Button>
-        <Button variant="destructive" size="sm" onClick={() => setDeleteConfirmOpen(true)}>
-          Löschen
-        </Button>
+      <div className="flex flex-col gap-2">
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" className="flex-1" onClick={() => onEdit(item.id)}>
+            Bearbeiten
+          </Button>
+          <Button variant="destructive" size="sm" onClick={() => setDeleteConfirmOpen(true)}>
+            Löschen
+          </Button>
+        </div>
+        {item.source_note_id && (
+          <Button variant="secondary" size="sm" className="w-full" onClick={handleSyncKnowledgeToNote}>
+            ↑ Änderungen in Notiz übernehmen
+          </Button>
+        )}
       </div>
 
       <ConfirmDialog

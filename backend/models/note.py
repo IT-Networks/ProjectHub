@@ -23,5 +23,7 @@ class Note(Base):
     is_pinned: Mapped[int] = mapped_column(Integer, default=0)
     tags: Mapped[str] = mapped_column(Text, default="[]")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # Bidirectional sync tracking
+    linked_knowledge_ids: Mapped[str] = mapped_column(Text, default="[]")  # JSON array
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now)

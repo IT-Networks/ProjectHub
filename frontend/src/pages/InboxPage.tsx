@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Mail, Link as LinkIcon } from 'lucide-react'
 import { useInboxStore } from '@/stores/inboxStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { Button } from '@/components/ui/button'
@@ -10,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useIsOffline } from '@/hooks/useOffline'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { ListSkeleton } from '@/components/shared/Skeleton'
 
 export function InboxPage() {
   const isOffline = useIsOffline()
@@ -77,35 +80,42 @@ export function InboxPage() {
             <Button onClick={handleSearch} disabled={emailLoading}>Suchen</Button>
           </div>
 
-          <div className="space-y-2">
-            {emailLoading && <p className="text-sm text-muted-foreground">Laden...</p>}
-            {emails.map((email: any) => (
-              <Card key={email.id || email.subject} className="flex items-center justify-between p-3">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{email.subject || '(Kein Betreff)'}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {email.sender} — {email.date ? new Date(email.date).toLocaleDateString('de-DE') : ''}
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setLinkDialog({
-                    source: 'email',
-                    ref: email.id || email.subject,
-                    subject: email.subject || '',
-                    sender: email.sender || '',
-                    date: email.date || '',
-                  })}
-                >
-                  Verknüpfen
-                </Button>
-              </Card>
-            ))}
-            {!emailLoading && emails.length === 0 && (
-              <p className="py-8 text-center text-sm text-muted-foreground">Keine Emails gefunden</p>
-            )}
-          </div>
+          {emailLoading && emails.length === 0 ? (
+            <ListSkeleton count={3} />
+          ) : emails.length === 0 ? (
+            <EmptyState
+              icon="📭"
+              title="Keine Emails gefunden"
+              description="Durchsuche deine Inbox oder warte auf neue Emails. Verknüpfe Emails mit Projekten und Todos."
+            />
+          ) : (
+            <div className="space-y-2">
+              {emails.map((email: any) => (
+                <Card key={email.id || email.subject} className="flex items-center justify-between p-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{email.subject || '(Kein Betreff)'}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {email.sender} — {email.date ? new Date(email.date).toLocaleDateString('de-DE') : ''}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setLinkDialog({
+                      source: 'email',
+                      ref: email.id || email.subject,
+                      subject: email.subject || '',
+                      sender: email.sender || '',
+                      date: email.date || '',
+                    })}
+                    icon={<LinkIcon className="w-4 h-4" />}
+                  >
+                    Verknüpfen
+                  </Button>
+                </Card>
+              ))}
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="webex" className="mt-4">

@@ -21,6 +21,8 @@ interface NoteStore {
   updateNote: (id: string, data: Partial<NoteCreate>) => Promise<void>
   deleteNote: (id: string) => Promise<void>
   togglePin: (id: string) => Promise<void>
+  addLinkedKnowledge: (noteId: string, knowledgeId: string) => Promise<void>
+  removeLinkedKnowledge: (noteId: string, knowledgeId: string) => Promise<void>
 }
 
 export const useNoteStore = create<NoteStore>((set, get) => ({
@@ -68,5 +70,33 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
       ),
     }))
     await api.patch(`/notes/${id}/pin`, {})
+  },
+
+  addLinkedKnowledge: async (noteId, knowledgeId) => {
+    set((state) => ({
+      notes: state.notes.map((n) => {
+        if (n.id === noteId) {
+          const linked = new Set(n.linked_knowledge_ids || [])
+          linked.add(knowledgeId)
+          return { ...n, linked_knowledge_ids: Array.from(linked) }
+        }
+        return n
+      }),
+    }))
+    await api.patch(`/notes/${noteId}/linked-knowledge`, { knowledge_id: knowledgeId })
+  },
+
+  removeLinkedKnowledge: async (noteId, knowledgeId) => {
+    set((state) => ({
+      notes: state.notes.map((n) => {
+        if (n.id === noteId) {
+          const linked = new Set(n.linked_knowledge_ids || [])
+          linked.delete(knowledgeId)
+          return { ...n, linked_knowledge_ids: Array.from(linked) }
+        }
+        return n
+      }),
+    }))
+    await api.patch(`/notes/${noteId}/linked-knowledge`, { knowledge_id: knowledgeId, remove: true })
   },
 }))

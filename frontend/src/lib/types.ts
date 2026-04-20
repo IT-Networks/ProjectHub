@@ -111,6 +111,7 @@ export interface Note {
   is_pinned: boolean
   tags: string[]
   sort_order: number
+  linked_knowledge_ids: string[]
   created_at: string
   updated_at: string
 }
@@ -242,6 +243,9 @@ export interface KnowledgeItem {
   confidence: Confidence
   metadata: Record<string, unknown>
   is_pinned: boolean
+  source_note_id: string | null
+  sync_status: 'synced' | 'pending' | 'conflict'
+  last_synced_at: string | null
   created_at: string
   updated_at: string
 }
