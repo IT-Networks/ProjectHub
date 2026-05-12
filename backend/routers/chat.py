@@ -153,7 +153,14 @@ async def _build_project_context(project_id: str, db: AsyncSession) -> str:
 async def project_chat(
     project_id: str, data: ProjectChatRequest, db: AsyncSession = Depends(get_db)
 ):
-    """Chat with LLM in project context. Returns SSE stream."""
+    """Chat with LLM in project context. Returns SSE stream.
+
+    Output format is intentionally legacy-shaped (anonymous ``data:``
+    lines with ``{token, done, full_response}``) to keep
+    ``frontend/src/components/chat/ProjectChat.tsx`` working unchanged.
+    Internally we now talk v2: ``ai_assist.agent_stream`` produces typed
+    events that we translate here.
+    """
     if not ai_assist.is_connected:
         await ai_assist.health_check()
 
@@ -169,28 +176,94 @@ async def project_chat(
     if context:
         full_message = f"[Projektkontext]\n{context}\n\n[Frage]\n{data.message}"
 
-    body = {
-        "session_id": session_id,
-        "message": full_message,
-        "stream": True,
-    }
-    if data.model:
-        body["model"] = data.model
-
     async def generate():
-        async for chunk in ai_assist.stream_post("/api/chat/stream", body):
-            yield chunk
+        fragments: list[str] = []
+        pending_error: str | None = None
+        confirm_code: str | None = None
+
+        async for event in ai_assist.agent_stream(
+            session_id=session_id,
+            message=full_message,
+            model=data.model,
+        ):
+            etype = event.get("type")
+            payload = event.get("data")
+
+            if etype == "token" and isinstance(payload, str) and payload:
+                fragments.append(payload)
+                yield f"data: {json.dumps({'token': payload})}\n\n"
+                continue
+
+            if etype == "error":
+                err = payload.get("error") if isinstance(payload, dict) else str(payload)
+                pending_error = err or "unbekannter Fehler"
+                if isinstance(payload, dict):
+                    confirm_code = payload.get("code")
+                continue
+            if etype == "cancelled":
+                pending_error = "Abgebrochen"
+                continue
+            if etype == "max_iterations":
+                pending_error = (
+                    "Maximale Iterationen erreicht — Antwort ggf. unvollständig"
+                )
+                continue
+            if etype == "confirm_required":
+                # The engine asked for confirmation of a write-tool. We
+                # have no UI for it in ProjectHub-chat — surface as error
+                # so the user knows the session needs a reset.
+                pending_error = (
+                    "Bestätigung erforderlich — Session bitte zurücksetzen"
+                )
+                continue
+
+            if etype == "done":
+                # Terminal: produce ONE final SSE frame that the frontend
+                # parser folds into the bubble. Frontend logic
+                # (ProjectChat.tsx:78-87) replaces fullText when it sees
+                # ``data.error`` OR ``data.done && data.full_response`` —
+                # so we never emit both in the same stream.
+                full = "".join(fragments)
+                if pending_error and not full:
+                    msg = {"error": pending_error}
+                    if confirm_code:
+                        msg["code"] = confirm_code
+                    yield f"data: {json.dumps(msg)}\n\n"
+                elif pending_error:
+                    # Preserve streamed text; append the warning so users
+                    # don't lose partial output to an overwriting error.
+                    full_with_warning = full + f"\n\n[{pending_error}]"
+                    yield (
+                        "data: "
+                        + json.dumps({"done": True, "full_response": full_with_warning})
+                        + "\n\n"
+                    )
+                else:
+                    yield (
+                        "data: "
+                        + json.dumps({"done": True, "full_response": full})
+                        + "\n\n"
+                    )
+                return
 
     return EventSourceResponse(generate())
 
 
 @router.get("/history/{session_id}")
 async def chat_history(session_id: str):
-    """Get chat history from AI-Assist."""
-    data = await ai_assist.get(f"/api/chat/{session_id}/history")
+    """Get chat history from AI-Assist v2.
+
+    Frontend expects ``{history: [...]}``; v2 returns
+    ``{messages: [...]}`` — adapt the field name here.
+    """
+    data = await ai_assist.get_session_history(session_id)
     if data is None:
         return {"session_id": session_id, "history": []}
-    return data
+    messages = data.get("messages") if isinstance(data, dict) else None
+    return {
+        "session_id": session_id,
+        "history": messages or [],
+    }
 
 
 @router.post("/research/{project_id}")
@@ -209,17 +282,19 @@ async def start_research(
 
     session_id = f"projecthub-research-{_gen_id()}"
 
-    # Use regular chat (non-streaming) for research
-    result_data = await ai_assist.post("/api/chat", {
-        "session_id": session_id,
-        "message": full_query,
-    })
+    result_data = await ai_assist.agent_call(
+        session_id=session_id,
+        message=full_query,
+    )
 
-    response_text = ""
-    if result_data and "response" in result_data:
-        response_text = result_data["response"]
-    elif result_data:
-        response_text = str(result_data)
+    if not result_data:
+        # Consistent with builds.py / pulls.py: 503 when AI-Assist is unreachable
+        raise HTTPException(503, "AI-Assist nicht erreichbar oder lieferte leere Antwort")
+
+    response_text = result_data.get("response") or ""
+    if not response_text:
+        raise HTTPException(502, "AI-Assist lieferte leere Antwort")
+    model_used = result_data.get("model", "")
 
     # Save to database
     research = ResearchResult(
@@ -227,7 +302,7 @@ async def start_research(
         project_id=project_id,
         query=data.query,
         result=response_text,
-        model_used="",
+        model_used=model_used,
         agent_team=data.team or "",
         session_id=session_id,
     )
