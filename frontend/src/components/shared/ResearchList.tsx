@@ -38,6 +38,12 @@ export function ResearchList({ projectId }: Props) {
     try {
       const data = await api.get<ResearchItem[]>(`/chat/research/${projectId}`)
       setItems(data)
+      try {
+        const imported = await api.get<string[]>(`/knowledge/${projectId}/imports/research`)
+        setImportedIds(new Set(imported))
+      } catch {
+        // ignore — endpoint may be unavailable in older backend
+      }
     } catch {
       setItems([])
     }

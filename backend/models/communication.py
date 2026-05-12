@@ -16,7 +16,7 @@ class LinkedMessage(Base):
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True)
     link_target: Mapped[str] = mapped_column(String(10), nullable=False)
-    # project, todo, note
+    # project, todo, note, knowledge
     target_id: Mapped[str] = mapped_column(String(16), nullable=False)
     source: Mapped[str] = mapped_column(String(10), nullable=False)  # email, webex
     source_ref: Mapped[str] = mapped_column(String(200), nullable=False)

@@ -177,12 +177,26 @@ async def accept_queue_item(
     item.reviewed_at = _now()
 
     await db.commit()
+    await db.refresh(todo)
 
     return {
         "success": True,
-        "todo_id": todo.id,
-        "title": todo.title,
-        "project_id": todo.project_id,
+        "todo": {
+            "id": todo.id,
+            "project_id": todo.project_id,
+            "title": todo.title,
+            "description": todo.description,
+            "status": todo.status,
+            "priority": todo.priority,
+            "deadline": todo.deadline,
+            "kanban_order": todo.kanban_order,
+            "tags": json.loads(todo.tags) if todo.tags else [],
+            "source": todo.source,
+            "source_ref": todo.source_ref,
+            "ai_analysis": todo.ai_analysis,
+            "created_at": todo.created_at,
+            "updated_at": todo.updated_at,
+        },
     }
 
 

@@ -25,11 +25,9 @@ export function NoteList({ projectId }: Props) {
   const updateNote = useNoteStore((s) => s.updateNote)
   const deleteNote = useNoteStore((s) => s.deleteNote)
   const togglePin = useNoteStore((s) => s.togglePin)
-  const addLinkedKnowledge = useNoteStore((s) => s.addLinkedKnowledge)
   const importNote = useKnowledgeStore((s) => s.importNote)
   const { success, error } = useToast()
 
-  const [importedIds, setImportedIds] = useState<Set<string>>(new Set())
   const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set())
   const [editOpen, setEditOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
@@ -80,7 +78,7 @@ export function NoteList({ projectId }: Props) {
     try {
       if (editId) {
         await updateNote(editId, { title: form.title, content: form.content, deadline: form.deadline || null })
-        success('Notiz aktualisiert!')
+        success('Notiz aktualisiert und synchronisiert!')
       } else {
         await createNote({ project_id: projectId, title: form.title, content: form.content, deadline: form.deadline || null })
         success('Notiz erstellt!')
@@ -121,19 +119,6 @@ export function NoteList({ projectId }: Props) {
         setDeletedNoteBackup(null)
       }
     }, 5000)
-  }
-
-  const handleSyncLinkedKnowledge = async (noteId: string) => {
-    const note = projectNotes.find((n) => n.id === noteId)
-    if (!note || note.linked_knowledge_ids.length === 0) return
-
-    try {
-      const knowledgeStore = useKnowledgeStore.getState()
-      await knowledgeStore.syncNoteToKnowledge(projectId, noteId, note.content, note.title)
-      success('Wissen synchronisiert!')
-    } catch (err) {
-      error('Fehler beim Synchronisieren')
-    }
   }
 
   return (
@@ -191,19 +176,13 @@ export function NoteList({ projectId }: Props) {
                 <Button variant="ghost" size="sm" onClick={() => togglePin(note.id)}>
                   {note.is_pinned ? 'Entpinnen' : 'Pinnen'}
                 </Button>
-                {(note.linked_knowledge_ids?.length ?? 0) > 0 && (
-                  <Button variant="ghost" size="sm" className="text-blue-400" onClick={() => handleSyncLinkedKnowledge(note.id)}>
-                    🔄 Sync ({note.linked_knowledge_ids?.length ?? 0})
-                  </Button>
-                )}
                 {(note.linked_knowledge_ids?.length ?? 0) > 0 ? (
                   <span className="px-2 py-1 text-xs text-green-500">✓ Zu Wissen verknüpft</span>
                 ) : (
                   <Button variant="ghost" size="sm" onClick={async () => {
                     try {
-                      const knowledge = await importNote(projectId, note.id)
-                      await addLinkedKnowledge(note.id, knowledge.id)
-                      setImportedIds((prev) => new Set([...prev, note.id]))
+                      await importNote(projectId, note.id)
+                      await fetchNotes(projectId)
                       success('In Wissensdatenbank importiert!')
                     } catch (err) {
                       error('Fehler beim Importieren')

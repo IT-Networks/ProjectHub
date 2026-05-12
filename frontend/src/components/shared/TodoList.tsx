@@ -212,9 +212,10 @@ export function TodoList({ projectId, enableBulkSelect = true }: Props) {
                 )}
                 <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-red-400"
                   aria-label="Todo löschen"
+                  title="Todo löschen"
                   onClick={() => handleDelete(todo.id)}
                 >
-                  x
+                  <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </div>
             </div>

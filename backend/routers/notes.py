@@ -1,4 +1,5 @@
 import json
+import re
 import secrets
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from models.note import Note
+from models.knowledge import KnowledgeItem
+from routers.knowledge import _fts_update
 
 router = APIRouter(prefix="/api/notes", tags=["notes"])
 
@@ -134,8 +137,39 @@ async def update_note(
         note.tags = json.dumps(data.tags)
     note.updated_at = _now()
 
+    linked_ids = json.loads(note.linked_knowledge_ids) if note.linked_knowledge_ids else []
+    synced_items: list[KnowledgeItem] = []
+    if linked_ids:
+        knowledge_result = await db.execute(
+            select(KnowledgeItem).where(
+                KnowledgeItem.project_id == note.project_id,
+                KnowledgeItem.id.in_(linked_ids),
+                KnowledgeItem.source_note_id == note.id,
+            )
+        )
+        content_plain = re.sub(r"<[^>]+>", " ", note.content)
+        content_plain = re.sub(r"\s+", " ", content_plain).strip()
+        for item in knowledge_result.scalars().all():
+            item.title = note.title
+            item.content = note.content
+            item.content_plain = content_plain[:5000]
+            item.sync_status = "synced"
+            item.last_synced_at = _now()
+            synced_items.append(item)
+
     await db.commit()
     await db.refresh(note)
+
+    any_fts_failed = False
+    for item in synced_items:
+        ok = await _fts_update(db, item)
+        if not ok:
+            item.sync_status = "conflict"
+            item.last_synced_at = _now()
+            any_fts_failed = True
+    if any_fts_failed:
+        await db.commit()
+
     return _to_response(note)
 
 
@@ -145,6 +179,18 @@ async def delete_note(note_id: str, db: AsyncSession = Depends(get_db)):
     note = result.scalar_one_or_none()
     if not note:
         raise HTTPException(404, "Notiz nicht gefunden")
+
+    linked_ids = json.loads(note.linked_knowledge_ids) if note.linked_knowledge_ids else []
+    if linked_ids:
+        knowledge_result = await db.execute(
+            select(KnowledgeItem).where(KnowledgeItem.id.in_(linked_ids))
+        )
+        for item in knowledge_result.scalars().all():
+            if item.project_id == note.project_id and item.source_note_id == note.id:
+                item.source_note_id = None
+                item.sync_status = "conflict"
+                item.last_synced_at = _now()
+
     await db.delete(note)
     await db.commit()
     return {"success": True}
@@ -169,7 +215,7 @@ class LinkedKnowledgeRequest(BaseModel):
     remove: bool = False
 
 
-@router.patch("/{note_id}/link-knowledge")
+@router.patch("/{note_id}/linked-knowledge")
 async def manage_linked_knowledge(
     note_id: str, data: LinkedKnowledgeRequest, db: AsyncSession = Depends(get_db)
 ) -> NoteResponse:

@@ -49,54 +49,47 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
   },
 
   updateNote: async (id, data) => {
-    // Optimistic: update local
+    const updated = await api.put<Note>(`/notes/${id}`, data)
     set((state) => ({
-      notes: state.notes.map((n) => (n.id === id ? { ...n, ...data } : n)),
+      notes: state.notes.map((n) => (n.id === id ? updated : n)),
     }))
-    await api.put(`/notes/${id}`, data)
+
+    if ((updated.linked_knowledge_ids?.length ?? 0) > 0) {
+      const knowledgeStore = await import('@/stores/knowledgeStore')
+      await knowledgeStore.useKnowledgeStore.getState().syncNoteToKnowledge(
+        updated.project_id,
+        updated.id,
+        updated.content,
+        updated.title,
+      )
+    }
   },
 
   deleteNote: async (id) => {
-    // Optimistic: remove
-    set((state) => ({ notes: state.notes.filter((n) => n.id !== id) }))
     await api.del(`/notes/${id}`)
+    set((state) => ({ notes: state.notes.filter((n) => n.id !== id) }))
   },
 
   togglePin: async (id) => {
-    // Optimistic: toggle local
+    const updated = await api.patch<Note>(`/notes/${id}/pin`, {})
     set((state) => ({
       notes: state.notes.map((n) =>
-        n.id === id ? { ...n, is_pinned: !n.is_pinned } : n
+        n.id === id ? updated : n
       ),
     }))
-    await api.patch(`/notes/${id}/pin`, {})
   },
 
   addLinkedKnowledge: async (noteId, knowledgeId) => {
+    const updated = await api.patch<Note>(`/notes/${noteId}/linked-knowledge`, { knowledge_id: knowledgeId })
     set((state) => ({
-      notes: state.notes.map((n) => {
-        if (n.id === noteId) {
-          const linked = new Set(n.linked_knowledge_ids || [])
-          linked.add(knowledgeId)
-          return { ...n, linked_knowledge_ids: Array.from(linked) }
-        }
-        return n
-      }),
+      notes: state.notes.map((n) => (n.id === noteId ? updated : n)),
     }))
-    await api.patch(`/notes/${noteId}/linked-knowledge`, { knowledge_id: knowledgeId })
   },
 
   removeLinkedKnowledge: async (noteId, knowledgeId) => {
+    const updated = await api.patch<Note>(`/notes/${noteId}/linked-knowledge`, { knowledge_id: knowledgeId, remove: true })
     set((state) => ({
-      notes: state.notes.map((n) => {
-        if (n.id === noteId) {
-          const linked = new Set(n.linked_knowledge_ids || [])
-          linked.delete(knowledgeId)
-          return { ...n, linked_knowledge_ids: Array.from(linked) }
-        }
-        return n
-      }),
+      notes: state.notes.map((n) => (n.id === noteId ? updated : n)),
     }))
-    await api.patch(`/notes/${noteId}/linked-knowledge`, { knowledge_id: knowledgeId, remove: true })
   },
 }))

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { api } from '@/lib/api'
+import { toast } from '@/stores/toastStore'
 import type { ProjectListItem, Project, ProjectCreate, ProjectUpdate, DataSourceLinkCreate } from '@/lib/types'
 
 interface ProjectStore {
@@ -29,7 +30,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       const projects = await api.get<ProjectListItem[]>('/projects')
       set({ projects, loading: false })
     } catch (e) {
-      set({ error: (e as Error).message, loading: false })
+      const msg = (e as Error).message
+      set({ error: msg, loading: false })
+      toast.error('Projekte konnten nicht geladen werden', { description: msg })
     }
   },
 
@@ -39,7 +42,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       const project = await api.get<Project>(`/projects/${id}`)
       set({ currentProject: project, loading: false })
     } catch (e) {
-      set({ error: (e as Error).message, loading: false })
+      const msg = (e as Error).message
+      set({ error: msg, loading: false })
+      toast.error('Projekt konnte nicht geladen werden', { description: msg })
     }
   },
 
@@ -62,12 +67,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   addSource: async (projectId: string, data: DataSourceLinkCreate) => {
-    await api.post(`/projects/${projectId}/sources`, data)
-    await get().fetchProject(projectId)
+    const updated = await api.post<Project>(`/projects/${projectId}/sources`, data)
+    set({ currentProject: updated })
+    await get().fetchProjects()
   },
 
   removeSource: async (projectId: string, sourceId: string) => {
-    await api.del(`/projects/${projectId}/sources/${sourceId}`)
-    await get().fetchProject(projectId)
+    const updated = await api.del<Project>(`/projects/${projectId}/sources/${sourceId}`)
+    set({ currentProject: updated })
+    await get().fetchProjects()
   },
 }))

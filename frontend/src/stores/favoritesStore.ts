@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { api } from '@/lib/api'
+import { toast } from '@/stores/toastStore'
 
 export interface Favorite {
   id: string
@@ -25,6 +26,9 @@ interface FavoritesState {
   // Recent items
   addRecentItem: (id: string, type: 'project' | 'todo' | 'note', title: string) => void
   getRecentItems: () => Array<{ id: string; type: 'project' | 'todo' | 'note'; title: string; accessedAt: Date }>
+
+  // Pruning: drop entries whose target no longer exists
+  pruneStale: (validProjectIds: readonly string[]) => { removedFavorites: number; removedRecents: number }
 }
 
 export const useFavoritesStore = create<FavoritesState>()(
@@ -36,36 +40,50 @@ export const useFavoritesStore = create<FavoritesState>()(
       addFavorite: async (id: string, type: 'project' | 'todo' | 'note', title: string, icon?: string) => {
         const state = get()
         const exists = state.favorites.some((f) => f.id === id)
+        if (exists) return
 
-        if (!exists) {
-          const newFavorite: Favorite = {
-            id,
-            type,
-            title,
-            icon,
-            addedAt: new Date(),
-            order: state.favorites.length,
-          }
+        const newFavorite: Favorite = {
+          id,
+          type,
+          title,
+          icon,
+          addedAt: new Date(),
+          order: state.favorites.length,
+        }
 
-          set((state) => ({
-            favorites: [...state.favorites, newFavorite],
-          }))
+        set((state) => ({ favorites: [...state.favorites, newFavorite] }))
+        toast.success('Zu Favoriten hinzugefügt', { description: title })
 
-          // Sync to backend
-          try {
-            await api.post('/favorites', { id, type, title })
-          } catch (err) {
-            console.error('Failed to sync favorite to backend:', err)
-          }
+        try {
+          await api.post('/favorites', { id, type, title })
+        } catch (err) {
+          console.error('Failed to sync favorite to backend:', err)
+          toast.warning('Favorit lokal gespeichert', {
+            description: 'Backend-Sync fehlgeschlagen — wird nachgeholt',
+          })
         }
       },
 
       removeFavorite: async (id: string) => {
-        set((state) => ({
-          favorites: state.favorites.filter((f) => f.id !== id),
-        }))
+        const state = get()
+        const removed = state.favorites.find((f) => f.id === id)
+        if (!removed) return
 
-        // Sync to backend
+        set((state) => ({ favorites: state.favorites.filter((f) => f.id !== id) }))
+
+        toast.info('Favorit entfernt', {
+          description: removed.title,
+          action: {
+            label: 'Rückgängig',
+            onClick: () => {
+              // Restore locally; re-sync to backend
+              set((s) => ({ favorites: [...s.favorites, removed] }))
+              void api.post('/favorites', { id: removed.id, type: removed.type, title: removed.title }).catch(() => {})
+            },
+          },
+          duration: 5000,
+        })
+
         try {
           await api.delete(`/favorites/${id}`)
         } catch (err) {
@@ -109,6 +127,28 @@ export const useFavoritesStore = create<FavoritesState>()(
 
       getRecentItems: () => {
         return get().recentItems
+      },
+
+      pruneStale: (validProjectIds: readonly string[]) => {
+        const validSet = new Set(validProjectIds)
+        const state = get()
+        const prunedFavorites = state.favorites.filter(
+          (f) => f.type !== 'project' || validSet.has(f.id),
+        )
+        const prunedRecents = state.recentItems.filter(
+          (r) => r.type !== 'project' || validSet.has(r.id),
+        )
+        const removedFavorites = state.favorites.length - prunedFavorites.length
+        const removedRecents = state.recentItems.length - prunedRecents.length
+        if (removedFavorites > 0 || removedRecents > 0) {
+          set({ favorites: prunedFavorites, recentItems: prunedRecents })
+          if (removedFavorites > 0) {
+            toast.info(`${removedFavorites} Favorit(en) bereinigt`, {
+              description: 'Projekt nicht mehr verfügbar',
+            })
+          }
+        }
+        return { removedFavorites, removedRecents }
       },
     }),
     {

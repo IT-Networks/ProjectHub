@@ -1,3 +1,12 @@
+// === Users (Team-Readiness Stub, siehe src/lib/currentUser.ts) ===
+export interface User {
+  id: string
+  name: string
+  email: string
+  avatar_url: string | null
+  color_hue?: number
+}
+
 // === Projekte ===
 export interface Project {
   id: string
@@ -5,6 +14,7 @@ export interface Project {
   description: string
   status: 'aktiv' | 'pausiert' | 'archiviert'
   color: string
+  accent_hue?: number | null
   tags: string[]
   sort_order: number
   docs_path: string | null
@@ -20,6 +30,7 @@ export interface ProjectListItem {
   description: string
   status: 'aktiv' | 'pausiert' | 'archiviert'
   color: string
+  accent_hue?: number | null
   tags: string[]
   sort_order: number
   docs_path: string | null
@@ -41,6 +52,7 @@ export interface ProjectCreate {
   description?: string
   status?: string
   color?: string
+  accent_hue?: number | null
   tags?: string[]
   docs_path?: string | null
 }
@@ -50,6 +62,7 @@ export interface ProjectUpdate {
   description?: string
   status?: string
   color?: string
+  accent_hue?: number | null
   tags?: string[]
   sort_order?: number
   docs_path?: string | null
@@ -96,6 +109,8 @@ export interface Todo {
   source: 'manual' | 'email' | 'webex'
   source_ref: string | null
   ai_analysis: string | null
+  assignee_id?: string | null
+  assignee?: User | null
   created_at: string
   updated_at: string
 }
