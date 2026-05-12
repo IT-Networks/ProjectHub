@@ -1,181 +1,137 @@
-import { useEffect, useMemo, useState } from 'react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, Cell, ResponsiveContainer } from 'recharts'
+import { useEffect, useMemo, Suspense, lazy } from 'react'
 import { useTodoStore } from '@/stores/todoStore'
+import { useNoteStore } from '@/stores/noteStore'
 import { useProjectStore } from '@/stores/projectStore'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Badge } from '@/components/ui/badge'
-import { EmptyState } from '@/components/shared/EmptyState'
-import { STATUS_LABELS, PRIORITY_LABELS } from '@/lib/types'
-import type { Todo } from '@/lib/types'
+import { useTimelineStore } from '@/stores/timelineStore'
+import { useTimelineUrlState } from '@/hooks/useTimelineUrlState'
+import { useViewTransitionNavigate } from '@/hooks/useViewTransition'
+import {
+  filterItems,
+  formatCursorLabel,
+  groupByBucket,
+  toTimelineItems,
+  type TimelineItem,
+} from '@/lib/timeline'
+import { TimelineHeader } from '@/components/timeline/shared/TimelineHeader'
+import { ScheduleView } from '@/components/timeline/ScheduleView'
 
-const STATUS_COLORS: Record<string, string> = {
-  backlog: '#6b7280',
-  in_progress: '#3b82f6',
-  review: '#f59e0b',
-  done: '#10b981',
-}
+const CalendarView = lazy(() =>
+  import('@/components/timeline/CalendarView').then((m) => ({ default: m.CalendarView })),
+)
 
-const PRIORITY_SORT: Record<string, number> = { high: 0, medium: 1, low: 2 }
-
-interface GanttBar {
-  name: string
-  todoId: string
-  start: number
-  duration: number
-  status: string
-  priority: string
-  projectName: string
-  deadline: string
-  createdAt: string
-}
+const GanttView = lazy(() =>
+  import('@/components/timeline/GanttView').then((m) => ({ default: m.GanttView })),
+)
 
 export function TimelinePage() {
-  const fetchTodos = useTodoStore((s) => s.fetchTodos)
+  useTimelineUrlState()
+
   const todos = useTodoStore((s) => s.todos)
+  const fetchTodos = useTodoStore((s) => s.fetchTodos)
+  const notes = useNoteStore((s) => s.notes)
+  const fetchNotes = useNoteStore((s) => s.fetchNotes)
   const projects = useProjectStore((s) => s.projects)
-  const [filterProject, setFilterProject] = useState<string | null>(null)
+
+  const view = useTimelineStore((s) => s.view)
+  const cursor = useTimelineStore((s) => s.cursor)
+  const zoom = useTimelineStore((s) => s.zoom)
+  const lane = useTimelineStore((s) => s.lane)
+  const filter = useTimelineStore((s) => s.filter)
+  const setView = useTimelineStore((s) => s.setView)
+  const setZoom = useTimelineStore((s) => s.setZoom)
+  const setLane = useTimelineStore((s) => s.setLane)
+  const setFilter = useTimelineStore((s) => s.setFilter)
+  const resetFilter = useTimelineStore((s) => s.resetFilter)
+  const shiftCursor = useTimelineStore((s) => s.shiftCursor)
+  const goToday = useTimelineStore((s) => s.goToday)
+
+  const navigate = useViewTransitionNavigate()
 
   useEffect(() => { fetchTodos() }, [fetchTodos])
+  useEffect(() => { fetchNotes() }, [fetchNotes])
 
-  const projectMap = useMemo(() => {
-    const map: Record<string, string> = {}
-    for (const p of projects) map[p.id] = p.name
-    return map
-  }, [projects])
+  const allItems = useMemo(
+    () => toTimelineItems({ todos, notes, projects }),
+    [todos, notes, projects],
+  )
 
-  // Build Gantt data from todos with deadlines
-  const ganttData = useMemo(() => {
-    const now = new Date()
-    const todosWithDates = todos
-      .filter((t) => t.deadline && t.status !== 'done')
-      .filter((t) => !filterProject || t.project_id === filterProject)
-      .sort((a, b) => {
-        // Sort by deadline, then priority
-        const da = new Date(a.deadline!).getTime()
-        const db = new Date(b.deadline!).getTime()
-        if (da !== db) return da - db
-        return (PRIORITY_SORT[a.priority] ?? 1) - (PRIORITY_SORT[b.priority] ?? 1)
-      })
+  const filteredItems = useMemo(
+    () => filterItems(allItems, filter),
+    [allItems, filter],
+  )
 
-    const minDate = new Date(Math.min(now.getTime(), ...todosWithDates.map((t) => new Date(t.created_at).getTime())))
-    const dayZero = new Date(minDate.getFullYear(), minDate.getMonth(), minDate.getDate()).getTime()
+  const now = useMemo(() => new Date(), [])
+  const cursorDate = useMemo(() => {
+    const d = new Date(cursor)
+    return isNaN(d.getTime()) ? now : d
+  }, [cursor, now])
 
-    return todosWithDates.map((t): GanttBar => {
-      const created = new Date(t.created_at).getTime()
-      const deadline = new Date(t.deadline!).getTime()
-      const startDay = Math.max(0, Math.floor((created - dayZero) / (1000 * 60 * 60 * 24)))
-      const durationDays = Math.max(1, Math.ceil((deadline - created) / (1000 * 60 * 60 * 24)))
+  const buckets = useMemo(
+    () => groupByBucket(filteredItems, { now, showCompleted: filter.showCompleted }),
+    [filteredItems, filter.showCompleted, now],
+  )
 
-      return {
-        name: t.title.length > 35 ? t.title.slice(0, 35) + '...' : t.title,
-        todoId: t.id,
-        start: startDay,
-        duration: durationDays,
-        status: t.status,
-        priority: t.priority,
-        projectName: t.project_id ? (projectMap[t.project_id] || '') : 'Standalone',
-        deadline: t.deadline!,
-        createdAt: t.created_at,
-      }
-    })
-  }, [todos, filterProject, projectMap])
+  const counts = useMemo(() => {
+    const overdue = allItems.filter((i) => !i.completed && new Date(i.at) < now).length
+    const completed = allItems.filter((i) => i.completed).length
+    return { total: allItems.length, overdue, completed }
+  }, [allItems, now])
 
-  // Done todos stats
-  const doneCount = todos.filter((t) => t.status === 'done').length
-  const openCount = todos.filter((t) => t.status !== 'done').length
-  const overdueCount = todos.filter((t) => t.deadline && t.status !== 'done' && new Date(t.deadline) < new Date()).length
-
-  const CustomTooltip = ({ active, payload }: any) => {
-    if (!active || !payload?.length) return null
-    const d = payload[0].payload as GanttBar
-    return (
-      <div className="rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-lg">
-        <p className="font-medium">{d.name}</p>
-        <p className="text-xs text-muted-foreground">{d.projectName}</p>
-        <div className="mt-1 flex gap-2 text-xs">
-          <Badge variant="outline" className="text-xs">{STATUS_LABELS[d.status]}</Badge>
-          <Badge variant="outline" className="text-xs">{PRIORITY_LABELS[d.priority]}</Badge>
-        </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Frist: {new Date(d.deadline).toLocaleDateString('de-DE')}
-        </p>
-      </div>
-    )
+  const handleItemClick = (item: TimelineItem) => {
+    if (item.project_id) navigate(`/projekte/${item.project_id}`)
+    else if (item.kind === 'todo') navigate('/kanban')
   }
+
+  const cursorLabel = formatCursorLabel(cursorDate, view)
+  const showCursorNav = view !== 'schedule'
 
   return (
     <div className="p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Select value={filterProject || '__all__'} onValueChange={(v) => setFilterProject(v === '__all__' ? null : v)}>
-            <SelectTrigger className="w-[200px]">
-              <SelectValue placeholder="Alle Projekte" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">Alle Projekte</SelectItem>
-              {projects.map((p) => (
-                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex gap-4 text-sm">
-          <span className="text-muted-foreground">{openCount} offen</span>
-          <span className="text-green-500">{doneCount} erledigt</span>
-          {overdueCount > 0 && <span className="text-red-400">{overdueCount} überfällig</span>}
-        </div>
-      </div>
+      <TimelineHeader
+        view={view}
+        cursorLabel={cursorLabel}
+        filter={filter}
+        projects={projects}
+        counts={counts}
+        showCursorNav={showCursorNav}
+        zoom={zoom}
+        lane={lane}
+        onViewChange={setView}
+        onShiftCursor={shiftCursor}
+        onGoToday={goToday}
+        onFilterChange={setFilter}
+        onResetFilter={resetFilter}
+        onZoomChange={setZoom}
+        onLaneChange={setLane}
+      />
 
-      {ganttData.length === 0 ? (
-        <EmptyState
-          icon="📅"
-          title="Keine Todos mit Fristen"
-          description="Erstelle Todos mit einer Frist oder setze eine Frist für bestehende Todos, um sie hier als Timeline zu sehen."
-          size="spacious"
-        />
-      ) : (
-        <div style={{ height: Math.max(300, ganttData.length * 40 + 60) }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart
-              data={ganttData}
-              layout="vertical"
-              margin={{ top: 10, right: 30, left: 200, bottom: 10 }}
-              barSize={20}
-            >
-              <XAxis
-                type="number"
-                domain={[0, 'auto']}
-                tickFormatter={(v) => `Tag ${v}`}
-                stroke="hsl(var(--muted-foreground))"
-                fontSize={12}
-              />
-              <YAxis
-                type="category"
-                dataKey="name"
-                width={190}
-                tick={{ fontSize: 12, fill: 'hsl(var(--foreground))' }}
-              />
-              <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="start" stackId="gantt" fill="transparent" />
-              <Bar dataKey="duration" stackId="gantt" radius={[4, 4, 4, 4]}>
-                {ganttData.map((entry, idx) => (
-                  <Cell key={idx} fill={STATUS_COLORS[entry.status] || '#6b7280'} fillOpacity={0.8} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+      {view === 'schedule' && (
+        <ScheduleView buckets={buckets} now={now} onItemClick={handleItemClick} />
       )}
 
-      {/* Legend */}
-      <div className="mt-4 flex items-center gap-6 text-xs text-muted-foreground">
-        {Object.entries(STATUS_COLORS).map(([status, color]) => (
-          <div key={status} className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded" style={{ backgroundColor: color, opacity: 0.8 }} />
-            {STATUS_LABELS[status]}
-          </div>
-        ))}
-      </div>
+      {view === 'calendar' && (
+        <Suspense fallback={<div className="py-12 text-center text-sm text-muted-foreground">Lädt…</div>}>
+          <CalendarView
+            cursor={cursorDate}
+            items={filteredItems}
+            now={now}
+            onItemClick={handleItemClick}
+          />
+        </Suspense>
+      )}
+
+      {view === 'gantt' && (
+        <Suspense fallback={<div className="py-12 text-center text-sm text-muted-foreground">Lädt…</div>}>
+          <GanttView
+            cursor={cursorDate}
+            zoom={zoom}
+            lane={lane}
+            items={filteredItems}
+            now={now}
+            onItemClick={handleItemClick}
+          />
+        </Suspense>
+      )}
     </div>
   )
 }
