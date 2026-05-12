@@ -32,9 +32,9 @@ if errorlevel 1 (
 )
 
 REM Start Backend
-echo [2/3] Starting Backend (Port 3001)...
+echo [2/3] Starting Backend (Port 5001)...
 cd /d "%BACKEND_DIR%"
-if not exist "venv" (
+if not exist "venv\Scripts\python.exe" (
     echo   Creating Python venv...
     python -m venv venv
 )
@@ -42,7 +42,7 @@ if not exist "venv" (
 call venv\Scripts\activate.bat
 pip install -q -r requirements.txt >nul 2>&1
 
-start "ProjectHub Backend" cmd /k "python run.py"
+start "ProjectHub Backend" cmd /k "call venv\Scripts\activate.bat && python run.py"
 timeout /t 3 /nobreak
 echo [OK] Backend started (serving Frontend + API)
 echo.
@@ -52,8 +52,8 @@ echo ProjectHub is running!
 echo ==========================================
 echo.
 echo URLs:
-echo   ProjectHub:  http://localhost:3001
-echo   API Docs:    http://localhost:3001/docs
+echo   ProjectHub:  http://localhost:5001
+echo   API Docs:    http://localhost:5001/docs
 echo.
 echo Close terminal window to stop service.
 echo.

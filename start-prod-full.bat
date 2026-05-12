@@ -32,7 +32,7 @@ echo [READY] %PYTHON_VERSION%
 echo.
 
 REM Start Backend
-echo [1/2] Starting Backend (FastAPI on port 3001)...
+echo [1/2] Starting Backend (FastAPI on port 5001)...
 cd /d "%BACKEND_DIR%"
 if not exist "requirements.txt" (
     echo [ERROR] Backend requirements.txt not found
@@ -40,7 +40,7 @@ if not exist "requirements.txt" (
 )
 
 REM Check venv
-if not exist "venv" (
+if not exist "venv\Scripts\python.exe" (
     echo   Creating Python venv...
     python -m venv venv
 )
@@ -50,8 +50,8 @@ call venv\Scripts\activate.bat
 pip install -q -r requirements.txt >nul 2>&1
 
 echo   Starting backend (run.py handles socket management)...
-start "ProjectHub Backend" cmd /k "python run.py"
-echo [OK] Backend started on port 3001
+start "ProjectHub Backend" cmd /k "call venv\Scripts\activate.bat && python run.py"
+echo [OK] Backend started on port 5001
 timeout /t 3 /nobreak
 echo.
 
@@ -60,9 +60,9 @@ echo ProjectHub is running!
 echo ==========================================
 echo.
 echo URLs:
-echo   ProjectHub Frontend:  http://localhost:3001
-echo   ProjectHub API:       http://localhost:3001/api
-echo   ProjectHub API Docs:  http://localhost:3001/docs
+echo   ProjectHub Frontend:  http://localhost:5001
+echo   ProjectHub API:       http://localhost:5001/api
+echo   ProjectHub API Docs:  http://localhost:5001/docs
 echo.
 echo Note: AI-Assist server should be running on port 8000
 echo.

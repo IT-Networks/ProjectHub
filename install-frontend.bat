@@ -6,6 +6,7 @@ setlocal enabledelayedexpansion
 
 set "PROJECT_ROOT=%CD%"
 set "FRONTEND_DIR=%PROJECT_ROOT%\frontend"
+set "BACKEND_DIR=%PROJECT_ROOT%\backend"
 
 echo.
 echo ==========================================
@@ -78,7 +79,7 @@ cd /d "%BACKEND_DIR%"
 findstr "localhost:3000" config.py >nul
 if errorlevel 1 (
     echo   Updating CORS for port 3000...
-    powershell -Command "(Get-Content config.py) -replace 'localhost:3001\"', 'localhost:3001\", \"http://localhost:3000\"' | Set-Content config.py"
+    powershell -Command "(Get-Content config.py) -replace 'localhost:5001\"', 'localhost:5001\", \"http://localhost:3000\"' | Set-Content config.py"
 ) else (
     echo   CORS already configured
 )

@@ -1,12 +1,19 @@
 @echo off
 echo === ProjectHub starten ===
 echo.
-echo Backend: http://localhost:3001
+echo Backend: http://localhost:5001
 echo Frontend (dev): http://localhost:5173
 echo.
 
 cd /d "%~dp0backend"
-start "ProjectHub Backend" cmd /c "python -m uvicorn main:app --port 3001 --host 127.0.0.1"
+if not exist "venv\Scripts\python.exe" (
+    echo Erstelle Python venv...
+    python -m venv venv
+    call venv\Scripts\activate.bat
+    pip install -q -r requirements.txt
+)
+
+start "ProjectHub Backend" cmd /k "call venv\Scripts\activate.bat && python run.py"
 
 timeout /t 2 /nobreak >nul
 
