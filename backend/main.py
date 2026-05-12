@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from config import settings
 from database import init_db
@@ -35,7 +36,9 @@ async def lifespan(app: FastAPI):
     # Shutdown
     stop_polling()
     from services.ai_assist_client import ai_assist
+    from services.jira_client import jira_client
     await ai_assist.close()
+    await jira_client.close()
     logger.info("ProjectHub wird beendet")
 
 
@@ -71,7 +74,9 @@ from routers.search import router as search_router  # noqa: E402
 from routers.activity import router as activity_router  # noqa: E402
 from routers.knowledge import router as knowledge_router  # noqa: E402
 from routers.sync import router as sync_router  # noqa: E402
+from routers.project_sync import router as project_sync_router  # noqa: E402
 from routers.update import router as update_router  # noqa: E402
+from routers.ai import router as ai_router  # noqa: E402
 
 app.include_router(projects_router)
 app.include_router(todos_router)
@@ -87,8 +92,10 @@ app.include_router(chat_router)
 app.include_router(search_router)
 app.include_router(activity_router)
 app.include_router(sync_router)
+app.include_router(project_sync_router)
 app.include_router(knowledge_router)
 app.include_router(update_router)
+app.include_router(ai_router)
 
 
 # Health check
@@ -98,10 +105,25 @@ async def health():
     return {"status": "ok", "version": get_current_version()}
 
 
-# Serve frontend in production (when dist/ exists)
+# Serve frontend in production (when dist/ exists).
+# Nicht-API-Pfade fallen auf index.html zurück, damit React Router Client-Routes
+# wie /timeline oder /projekte/:id auch bei Direkt-Aufruf / F5 funktionieren.
+class SPAStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        url_path = scope.get("path", "") if isinstance(scope, dict) else ""
+        if url_path.startswith("/api/") or url_path == "/api":
+            raise StarletteHTTPException(status_code=404)
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as ex:
+            if ex.status_code == 404:
+                return await super().get_response("index.html", scope)
+            raise
+
+
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
-    app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
+    app.mount("/", SPAStaticFiles(directory=str(frontend_dist)), name="frontend")
 
 
 if __name__ == "__main__":

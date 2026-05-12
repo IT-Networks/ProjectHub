@@ -18,6 +18,8 @@ import { CommandPalette } from '@/components/layout/CommandPalette'
 import { KeyboardShortcutsHelp } from '@/components/shared/KeyboardShortcutsHelp'
 import { useThemeStore } from '@/stores/themeStore'
 import { SuccessAnimation } from '@/components/shared/SuccessAnimation'
+import { AppToaster } from '@/components/shared/AppToaster'
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 
 function AppLayout() {
   const fetchProjects = useProjectStore((s) => s.fetchProjects)
@@ -47,7 +49,9 @@ function AppLayout() {
           </div>
         )}
         <main className="flex-1 overflow-y-auto animate-in fade-in duration-150">
-          <Outlet />
+          <ErrorBoundary>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
       <SuccessAnimation
@@ -55,6 +59,7 @@ function AppLayout() {
         type="checkmark"
         onComplete={() => setShowSuccess(false)}
       />
+      <AppToaster />
     </div>
   )
 }

@@ -3,7 +3,9 @@ import { Sun, Moon, Search } from 'lucide-react'
 import { useOfflineStore } from '@/hooks/useOffline'
 import { useSSEStore } from '@/hooks/useSSE'
 import { useThemeStore } from '@/stores/themeStore'
+import { useCommandPaletteStore } from '@/stores/commandPaletteStore'
 import { Button } from '@/components/ui/button'
+import { QuickAddBar } from './QuickAddBar'
 import { cn } from '@/lib/utils'
 
 const ROUTE_TITLES: Record<string, string> = {
@@ -23,17 +25,24 @@ export function TopBar() {
   const sseConnected = useSSEStore((s) => s.connected)
   const theme = useThemeStore((s) => s.theme)
   const toggleTheme = useThemeStore((s) => s.toggleTheme)
+  const openPalette = useCommandPaletteStore((s) => s.setOpen)
 
   return (
-    <header className="flex h-14 items-center justify-between border-b border-border bg-background px-6">
-      <div className="flex items-center gap-3">
+    <header className="flex h-14 items-center justify-between gap-6 border-b border-border bg-background px-6">
+      <div className="flex shrink-0 items-center gap-3">
         <h1 className="text-lg font-semibold">{title}</h1>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-1 justify-center">
+        <QuickAddBar />
+      </div>
+
+      <div className="flex shrink-0 items-center gap-3">
         {/* Global Search Trigger */}
         <button
-          onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))}
+          type="button"
+          onClick={() => openPalette(true)}
+          aria-label="Suche öffnen"
           className="flex cursor-pointer items-center gap-2 rounded-md border border-input bg-muted/50 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted"
         >
           <Search className="w-4 h-4" />

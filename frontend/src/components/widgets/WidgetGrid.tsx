@@ -62,7 +62,7 @@ function widgetTitle(widget: WidgetConfig): string {
 }
 
 export function WidgetGrid() {
-  const { widgets, fetchDashboard, addWidget, removeWidget } = useDashboardStore()
+  const { widgets, fetchDashboard, addWidget, removeWidget, updateLayout } = useDashboardStore()
   const { projects } = useProjectStore()
   const [addOpen, setAddOpen] = useState(false)
   const [newType, setNewType] = useState('todo_count')
@@ -95,8 +95,42 @@ export function WidgetGrid() {
     setNewProjectId('')
   }
 
-  const handleDragEnd = (_event: DragEndEvent) => {
-    // Simple reorder — could implement full grid repositioning later
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const activeWidget = widgets.find((w) => w.id === active.id)
+    const overWidget = widgets.find((w) => w.id === over.id)
+    if (!activeWidget || !overWidget) return
+
+    // Swap grid positions of the two widgets; everyone else stays put
+    const next = widgets.map((w) => {
+      if (w.id === activeWidget.id) {
+        return {
+          id: w.id,
+          grid_col: overWidget.grid_col,
+          grid_row: overWidget.grid_row,
+          grid_width: w.grid_width,
+          grid_height: w.grid_height,
+        }
+      }
+      if (w.id === overWidget.id) {
+        return {
+          id: w.id,
+          grid_col: activeWidget.grid_col,
+          grid_row: activeWidget.grid_row,
+          grid_width: w.grid_width,
+          grid_height: w.grid_height,
+        }
+      }
+      return {
+        id: w.id,
+        grid_col: w.grid_col,
+        grid_row: w.grid_row,
+        grid_width: w.grid_width,
+        grid_height: w.grid_height,
+      }
+    })
+    void updateLayout(next)
   }
 
   const visibleWidgets = widgets.filter((w) => w.is_visible)

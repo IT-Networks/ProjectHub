@@ -8,32 +8,47 @@ interface Shortcut {
   key: string
   label: string
   description: string
-  category: 'navigation' | 'creation' | 'general'
+  category: 'navigation' | 'creation' | 'timeline' | 'kanban' | 'general'
 }
 
 const SHORTCUTS: Shortcut[] = [
   // Navigation
-  { key: '1', label: 'Dashboard', description: 'Go to dashboard', category: 'navigation' },
-  { key: '2', label: 'Projects', description: 'Go to projects', category: 'navigation' },
-  { key: '3', label: 'Kanban', description: 'Go to kanban board', category: 'navigation' },
-  { key: '4', label: 'Timeline', description: 'Go to timeline view', category: 'navigation' },
-  { key: '5', label: 'Inbox', description: 'Go to inbox', category: 'navigation' },
-  { key: '6', label: 'Queue', description: 'Go to todo queue', category: 'navigation' },
-  { key: '7', label: 'Settings', description: 'Go to settings', category: 'navigation' },
+  { key: '1', label: 'Dashboard', description: 'Zum Dashboard', category: 'navigation' },
+  { key: '2', label: 'Projekte', description: 'Zu den Projekten', category: 'navigation' },
+  { key: '3', label: 'Kanban', description: 'Zum Kanban-Board', category: 'navigation' },
+  { key: '4', label: 'Timeline', description: 'Zur Timeline-Ansicht', category: 'navigation' },
+  { key: '5', label: 'Inbox', description: 'Zum Posteingang', category: 'navigation' },
+  { key: '6', label: 'Queue', description: 'Zur Todo-Queue', category: 'navigation' },
+  { key: '7', label: 'Einstellungen', description: 'Zu den Einstellungen', category: 'navigation' },
 
   // Creation
-  { key: 'n', label: 'New', description: 'Create new item (context-aware)', category: 'creation' },
+  { key: '/', label: 'Quick-Add', description: 'Todo-Eingabe oben fokussieren', category: 'creation' },
+  { key: 'n', label: 'Neu', description: 'Neues Item anlegen (kontextabhängig)', category: 'creation' },
+
+  // Timeline
+  { key: '1 / 2 / 3', label: 'Ansicht', description: 'Schedule / Calendar / Gantt umschalten', category: 'timeline' },
+  { key: 'h / l', label: 'Cursor', description: 'Cursor eine Einheit zurück/vor', category: 'timeline' },
+  { key: 'j / k', label: 'Buckets', description: 'Zwischen Schedule-Buckets scrollen', category: 'timeline' },
+  { key: '.', label: 'Heute', description: 'Cursor auf heute setzen', category: 'timeline' },
+  { key: 'c', label: 'Erledigte', description: 'Abgeschlossene Items ein-/ausblenden', category: 'timeline' },
+
+  // Kanban
+  { key: '[ / ]', label: 'Dichte', description: 'Karten-Dichte compact ↔ comfortable ↔ spacious', category: 'kanban' },
+  { key: 'Cmd/Ctrl + A', label: 'Alle auswählen', description: 'Alle Karten markieren', category: 'kanban' },
+  { key: 'Shift + Klick', label: 'Mehrfachauswahl', description: 'Range-Selection zwischen Karten', category: 'kanban' },
 
   // General
-  { key: 'Cmd/Ctrl + K', label: 'Command Search', description: 'Open search and command palette', category: 'general' },
-  { key: '?', label: 'Help', description: 'Show keyboard shortcuts', category: 'general' },
-  { key: 'Esc', label: 'Escape', description: 'Close modals or clear focus', category: 'general' },
+  { key: 'Cmd/Ctrl + K', label: 'Suche', description: 'Command-Palette öffnen', category: 'general' },
+  { key: '?', label: 'Hilfe', description: 'Diese Übersicht anzeigen', category: 'general' },
+  { key: 'Esc', label: 'Abbrechen', description: 'Dialoge schließen, Auswahl aufheben', category: 'general' },
 ]
 
 const CATEGORIES = {
   navigation: 'Navigation',
-  creation: 'Creation',
-  general: 'General',
+  creation: 'Erstellen',
+  timeline: 'Timeline',
+  kanban: 'Kanban',
+  general: 'Allgemein',
 }
 
 export function KeyboardShortcutsHelp() {

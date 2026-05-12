@@ -321,14 +321,17 @@ async def _extract_knowledge_from_chunk(chunk: DocChunk, file_name: str) -> dict
     )
 
     try:
-        result = await ai_assist.post("/api/chat", {
-            "session_id": f"projecthub-docextract-{_gen_id()}",
-            "message": prompt,
-        })
-        if not result or "response" not in result:
+        result = await ai_assist.agent_call(
+            session_id=f"projecthub-docextract-{_gen_id()}",
+            message=prompt,
+            auto_detect=False,  # pure JSON extraction — no domain tools needed
+        )
+        if not result:
             return None
 
-        response_text = result["response"]
+        response_text = result.get("response") or ""
+        if not response_text:
+            return None
 
         # Try to parse JSON from response
         # LLM might wrap in ```json ... ```

@@ -21,6 +21,7 @@ export function Sidebar() {
   const fetchStats = useTodoQueueStore((s) => s.fetchStats)
   const rawFavorites = useFavoritesStore((s) => s.favorites)
   const rawRecentItems = useFavoritesStore((s) => s.recentItems)
+  const pruneStale = useFavoritesStore((s) => s.pruneStale)
 
   const favorites = useMemo(() => rawFavorites.sort((a, b) => a.order - b.order), [rawFavorites])
   const recentItems = useMemo(() => {
@@ -33,6 +34,12 @@ export function Sidebar() {
   }, [rawRecentItems])
 
   useEffect(() => { fetchStats() }, [fetchStats])
+
+  // Remove favorites/recents pointing to deleted projects once the project list is loaded
+  useEffect(() => {
+    if (projects.length === 0) return
+    pruneStale(projects.map((p) => p.id))
+  }, [projects, pruneStale])
 
   return (
     <aside className="flex h-screen w-60 flex-col border-r border-border bg-sidebar text-sidebar-foreground">
@@ -48,6 +55,7 @@ export function Sidebar() {
             key={item.path}
             to={item.path}
             end={item.path === '/'}
+            viewTransition
             className={({ isActive }) =>
               cn(
                 'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
@@ -84,6 +92,7 @@ export function Sidebar() {
                 <NavLink
                   key={fav.id}
                   to={`/projekte/${fav.id}`}
+                  viewTransition
                   className={({ isActive }) =>
                     cn(
                       'flex items-center gap-3 rounded-md px-3 py-1.5 text-sm transition-colors',
@@ -135,6 +144,7 @@ export function Sidebar() {
                 <NavLink
                   key={`recent-${item.id}`}
                   to={`/projekte/${item.id}`}
+                  viewTransition
                   className={({ isActive }) =>
                     cn(
                       'flex items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-colors',
@@ -168,6 +178,7 @@ export function Sidebar() {
           <NavLink
             key={p.id}
             to={`/projekte/${p.id}`}
+            viewTransition
             className={({ isActive }) =>
               cn(
                 'flex items-center gap-3 rounded-md px-3 py-1.5 text-sm transition-colors',
@@ -190,6 +201,7 @@ export function Sidebar() {
       <div className="border-t border-border px-2 py-2">
         <NavLink
           to="/einstellungen"
+          viewTransition
           className={({ isActive }) =>
             cn(
               'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',

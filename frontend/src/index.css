@@ -57,6 +57,10 @@ body {
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-subtle: var(--brand-subtle);
+  --color-brand-border: var(--brand-border);
 }
 
 :root {
@@ -92,6 +96,20 @@ body {
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  --brand-hue: 262;
+  --brand-chroma: 0.14;
+  --brand: oklch(0.55 var(--brand-chroma) var(--brand-hue));
+  --brand-foreground: oklch(0.985 0 0);
+  --brand-subtle: oklch(0.55 var(--brand-chroma) var(--brand-hue) / 0.12);
+  --brand-border: oklch(0.55 var(--brand-chroma) var(--brand-hue) / 0.35);
+
+  --motion-duration-instant: 100ms;
+  --motion-duration-fast: 180ms;
+  --motion-duration-base: 240ms;
+  --motion-duration-slow: 360ms;
+  --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .dark {
@@ -126,6 +144,51 @@ body {
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  --brand: oklch(0.70 var(--brand-chroma) var(--brand-hue));
+  --brand-foreground: oklch(0.145 0 0);
+  --brand-subtle: oklch(0.70 var(--brand-chroma) var(--brand-hue) / 0.18);
+  --brand-border: oklch(0.70 var(--brand-chroma) var(--brand-hue) / 0.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration-instant: 0ms;
+    --motion-duration-fast: 0ms;
+    --motion-duration-base: 0ms;
+    --motion-duration-slow: 0ms;
+  }
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--motion-duration-base);
+  animation-timing-function: var(--motion-ease-out);
+}
+
+::view-transition-old(root) {
+  animation-name: vt-fade-out;
+}
+
+::view-transition-new(root) {
+  animation-name: vt-fade-in;
+}
+
+@keyframes vt-fade-out {
+  to { opacity: 0; }
+}
+
+@keyframes vt-fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes wip-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 oklch(0.65 0.22 27 / 0.35); }
+  50% { box-shadow: 0 0 0 4px oklch(0.65 0.22 27 / 0); }
+}
+
+.wip-pulse {
+  animation: wip-pulse 1.6s ease-out infinite;
 }
 
 @layer base {

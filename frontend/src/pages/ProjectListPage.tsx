@@ -1,9 +1,9 @@
 import { useEffect, useState, useMemo } from 'react'
-import { Link } from 'react-router-dom'
 import { Plus, Trash2 } from 'lucide-react'
 import { useProjectStore } from '@/stores/projectStore'
 import { useFavoritesStore } from '@/stores/favoritesStore'
 import { useBulkSelectionStore } from '@/stores/bulkSelectionStore'
+import { useViewTransitionNavigate } from '@/hooks/useViewTransition'
 import { useToast } from '@/components/shared/Toast'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -28,6 +28,7 @@ export function ProjectListPage() {
   const { projects, loading, fetchProjects, createProject, deleteProject } = useProjectStore()
   const { success, error } = useToast()
   const addRecentItem = useFavoritesStore((s) => s.addRecentItem)
+  const navigate = useViewTransitionNavigate()
   const {
     selectedIds,
     isSelectMode,
@@ -48,8 +49,7 @@ export function ProjectListPage() {
 
   useEffect(() => {
     fetchProjects()
-    addRecentItem('projekte-page', 'project', 'Projekte')
-  }, [fetchProjects, addRecentItem])
+  }, [fetchProjects])
 
   // Filter projects based on search and filters
   const filteredProjects = useMemo(() => {
@@ -187,78 +187,89 @@ export function ProjectListPage() {
       ) : (
         // Show project cards
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {filteredProjects.map((p) => (
-            <div key={p.id}>
-              <Card
-                className={`group cursor-pointer p-5 transition-colors ${
-                  isSelected(p.id) ? 'border-primary bg-primary/5' : 'hover:bg-accent/50'
-                }`}
-                onClick={(e) => {
-                  if (isSelectMode && !(e.target as HTMLElement).closest('a, button')) {
-                    toggleItem(p.id)
-                  }
-                }}
-              >
-                <div className="mb-3 flex items-center gap-3">
-                  {isSelectMode && (
-                    <Checkbox
-                      checked={isSelected(p.id)}
-                      onChange={(checked) => {
-                        if (checked) {
-                          toggleItem(p.id)
-                        } else {
-                          toggleItem(p.id)
-                        }
-                      }}
-                      className="flex-shrink-0"
-                      ariaLabel={`Select ${p.name}`}
+          {filteredProjects.map((p) => {
+            const openProject = () => {
+              addRecentItem(p.id, 'project', p.name)
+              navigate(`/projekte/${p.id}`)
+            }
+            const onCardClick = (e: React.MouseEvent) => {
+              if ((e.target as HTMLElement).closest('[data-no-nav]')) return
+              if (isSelectMode) {
+                toggleItem(p.id)
+                return
+              }
+              openProject()
+            }
+            const onCardKey = (e: React.KeyboardEvent) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return
+              if ((e.target as HTMLElement).closest('[data-no-nav]')) return
+              e.preventDefault()
+              if (isSelectMode) toggleItem(p.id)
+              else openProject()
+            }
+            return (
+              <div key={p.id}>
+                <Card
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Projekt ${p.name} öffnen`}
+                  className={`group cursor-pointer p-5 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-brand/40 ${
+                    isSelected(p.id) ? 'border-primary bg-primary/5' : 'hover:bg-accent/50'
+                  }`}
+                  onClick={onCardClick}
+                  onKeyDown={onCardKey}
+                >
+                  <div className="mb-3 flex items-center gap-3">
+                    {isSelectMode && (
+                      <div data-no-nav>
+                        <Checkbox
+                          checked={isSelected(p.id)}
+                          onChange={() => toggleItem(p.id)}
+                          className="flex-shrink-0"
+                          ariaLabel={`Select ${p.name}`}
+                        />
+                      </div>
+                    )}
+                    <span
+                      className="h-3 w-3 rounded-full"
+                      style={{ backgroundColor: p.color }}
                     />
-                  )}
-                  <span
-                    className="h-3 w-3 rounded-full"
-                    style={{ backgroundColor: p.color }}
-                  />
-                  <Link
-                    to={`/projekte/${p.id}`}
-                    onClick={() => addRecentItem(p.id, 'project', p.name)}
-                    className="flex-1 flex items-center gap-3"
-                  >
-                    <span className="font-medium flex-1">{p.name}</span>
-                  </Link>
-                  <FavoriteButton
-                    id={p.id}
-                    type="project"
-                    title={p.name}
-                    size="sm"
-                    className={`transition-opacity ${
-                      isSelectMode ? 'opacity-0' : 'opacity-0 group-hover:opacity-100'
-                    }`}
-                  />
-                  <Badge variant="secondary" className="text-xs">
-                    {STATUS_LABELS[p.status] || p.status}
-                  </Badge>
-                </div>
-                {p.description && (
-                  <p className="mb-3 line-clamp-2 text-sm text-muted-foreground">
-                    {p.description}
-                  </p>
-                )}
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                  <span>{p.todo_open} offene Todos</span>
-                  <span>{p.source_count} Quellen</span>
-                </div>
-                {p.tags.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {p.tags.map((tag) => (
-                      <Badge key={tag} variant="outline" className="text-xs">
-                        {tag}
-                      </Badge>
-                    ))}
+                    <span className="flex-1 font-medium">{p.name}</span>
+                    <div data-no-nav>
+                      <FavoriteButton
+                        id={p.id}
+                        type="project"
+                        title={p.name}
+                        size="sm"
+                        className={isSelectMode ? 'opacity-0' : ''}
+                      />
+                    </div>
+                    <Badge variant="secondary" className="text-xs">
+                      {STATUS_LABELS[p.status] || p.status}
+                    </Badge>
                   </div>
-                )}
-              </Card>
-            </div>
-          ))}
+                  {p.description && (
+                    <p className="mb-3 line-clamp-2 text-sm text-muted-foreground">
+                      {p.description}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                    <span>{p.todo_open} offene Todos</span>
+                    <span>{p.source_count} Quellen</span>
+                  </div>
+                  {p.tags.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {p.tags.map((tag) => (
+                        <Badge key={tag} variant="outline" className="text-xs">
+                          {tag}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              </div>
+            )
+          })}
         </div>
       )}
 

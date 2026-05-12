@@ -47,7 +47,8 @@ if __name__ == "__main__":
             sock.close()
             if result != 0:
                 break  # Port is available
-        except:
+        except OSError as e:
+            logging.warning("Port-check failed on attempt %d: %s — proceeding anyway", attempt + 1, e)
             break
         if attempt < retries - 1:
             time.sleep(2)

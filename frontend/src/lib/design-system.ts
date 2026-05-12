@@ -4,6 +4,7 @@
  * Consistent spacing, typography, and visual hierarchy across the app.
  * All values based on 8px base unit for consistency.
  */
+import type { CSSProperties } from 'react'
 
 // ═════════════════════════════════════════════════════════════════════
 // TYPOGRAPHY SCALE
@@ -235,3 +236,62 @@ export const A11Y = {
   focusRingOffset: 'focus-visible:outline-offset-2',
   reducedMotion: '@media (prefers-reduced-motion: reduce)',
 } as const
+
+// ═════════════════════════════════════════════════════════════════════
+// MOTION TOKENS — mirror of CSS custom properties in index.css
+// ═════════════════════════════════════════════════════════════════════
+
+export const MOTION = {
+  duration: {
+    instant: 100,
+    fast: 180,
+    base: 240,
+    slow: 360,
+  },
+  ease: {
+    out: 'cubic-bezier(0.22, 1, 0.36, 1)',
+    spring: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
+  },
+  cssVar: {
+    durationInstant: 'var(--motion-duration-instant)',
+    durationFast: 'var(--motion-duration-fast)',
+    durationBase: 'var(--motion-duration-base)',
+    durationSlow: 'var(--motion-duration-slow)',
+    easeOut: 'var(--motion-ease-out)',
+    easeSpring: 'var(--motion-ease-spring)',
+  },
+  viewTransitionName: {
+    card: (id: string) => `card-${id}`,
+    routeHeader: 'route-header',
+    routeContent: 'route-content',
+  },
+} as const
+
+// ═════════════════════════════════════════════════════════════════════
+// BRAND ACCENT PRESETS — seeds for per-project accent picker
+// ═════════════════════════════════════════════════════════════════════
+
+export interface AccentPreset {
+  name: string
+  label: string
+  hue: number
+  chroma?: number
+}
+
+export const ACCENT_PRESETS: readonly AccentPreset[] = [
+  { name: 'indigo',  label: 'Indigo',  hue: 262 },
+  { name: 'emerald', label: 'Grün',    hue: 155 },
+  { name: 'amber',   label: 'Gelb',    hue:  75 },
+  { name: 'rose',    label: 'Rot',     hue:  10 },
+  { name: 'cyan',    label: 'Blau',    hue: 215 },
+  { name: 'fuchsia', label: 'Pink',    hue: 325 },
+] as const
+
+export const DEFAULT_ACCENT_HUE = 262
+
+export function accentStyle(hue: number | null | undefined, chroma?: number): CSSProperties {
+  const h = hue ?? DEFAULT_ACCENT_HUE
+  const style: Record<string, string> = { '--brand-hue': String(h) }
+  if (chroma !== undefined) style['--brand-chroma'] = String(chroma)
+  return style as CSSProperties
+}

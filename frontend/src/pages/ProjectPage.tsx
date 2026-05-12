@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useParams } from 'react-router-dom'
+import { useViewTransitionNavigate } from '@/hooks/useViewTransition'
 import { useProjectStore } from '@/stores/projectStore'
 import { useFavoritesStore } from '@/stores/favoritesStore'
+import { useProjectSyncStore } from '@/stores/projectSyncStore'
+import { useSSEEvent } from '@/hooks/useSSE'
 import { useToast } from '@/components/shared/Toast'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -22,6 +25,8 @@ import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
 import { KnowledgeTab } from '@/components/knowledge/KnowledgeTab'
 import { FormField } from '@/components/shared/FormField'
 import { FavoriteButton } from '@/components/shared/FavoriteButton'
+import { SyncIndicator } from '@/components/shared/SyncIndicator'
+import { ChangesReviewPanel } from '@/components/sync/ChangesReviewPanel'
 
 const SOURCE_FIELDS: Record<SourceType, { label: string; fields: { key: string; label: string; placeholder: string }[] }> = {
   jenkins_job: {
@@ -65,7 +70,7 @@ const SOURCE_FIELDS: Record<SourceType, { label: string; fields: { key: string; 
 
 export function ProjectPage() {
   const { id } = useParams<{ id: string }>()
-  const navigate = useNavigate()
+  const navigate = useViewTransitionNavigate()
   const { currentProject, loading, fetchProject, deleteProject, addSource, removeSource } = useProjectStore()
   const { success, error } = useToast()
   const addRecentItem = useFavoritesStore((s) => s.addRecentItem)
@@ -78,6 +83,7 @@ export function ProjectPage() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [removeSourceId, setRemoveSourceId] = useState<string | null>(null)
   const [submittingSource, setSubmittingSource] = useState(false)
+  const pendingRemoveRef = useRef<{ timer: number; cancelled: boolean } | null>(null)
 
   useEffect(() => {
     if (id) {
@@ -90,6 +96,23 @@ export function ProjectPage() {
       addRecentItem(currentProject.id, 'project', currentProject.name)
     }
   }, [currentProject?.id, currentProject?.name, addRecentItem])
+
+  // Background sync: fire-and-forget on project open; server enforces 30-min cooldown
+  const triggerSync = useProjectSyncStore((s) => s.triggerSync)
+  const fetchSyncStatus = useProjectSyncStore((s) => s.fetchStatus)
+  const onSyncComplete = useProjectSyncStore((s) => s.onSyncComplete)
+  const syncStatus = useProjectSyncStore((s) => (id ? s.statusByProject[id] : undefined))
+
+  useEffect(() => {
+    if (!id) return
+    void fetchSyncStatus(id)
+    void triggerSync(id, 'auto_open')
+  }, [id, fetchSyncStatus, triggerSync])
+
+  useSSEEvent('sync_complete', (payload) => {
+    const data = payload as { project_id?: string }
+    if (id && data.project_id === id) void onSyncComplete(id)
+  })
 
   if (loading && !currentProject) {
     return <div className="p-6 text-muted-foreground">Laden...</div>
@@ -171,7 +194,14 @@ export function ProjectPage() {
             <Badge key={tag} variant="outline">{tag}</Badge>
           ))}
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <SyncIndicator
+            projectId={p.id}
+            running={syncStatus?.running ?? false}
+            lastRun={syncStatus?.last_run ?? null}
+            pending={syncStatus?.pending_changes ?? 0}
+            onTrigger={() => triggerSync(p.id, 'manual', true)}
+          />
           <Button variant="outline" size="sm" onClick={() => setChatOpen(true)}>
             Chat
           </Button>
@@ -203,12 +233,35 @@ export function ProjectPage() {
       <Tabs defaultValue="uebersicht">
         <TabsList>
           <TabsTrigger value="uebersicht">Übersicht</TabsTrigger>
-          <TabsTrigger value="todos">Todos</TabsTrigger>
-          <TabsTrigger value="notizen">Notizen</TabsTrigger>
+          <TabsTrigger value="todos" className="gap-1.5">
+            Todos
+            {p.counts.todos_open > 0 && (
+              <span className="rounded-full bg-muted px-1.5 py-0 text-[10px] tabular-nums">{p.counts.todos_open}</span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="notizen" className="gap-1.5">
+            Notizen
+            {p.counts.notes > 0 && (
+              <span className="rounded-full bg-muted px-1.5 py-0 text-[10px] tabular-nums">{p.counts.notes}</span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="nachrichten">Nachrichten</TabsTrigger>
           <TabsTrigger value="wissen">Wissen</TabsTrigger>
-          <TabsTrigger value="recherche">Recherche</TabsTrigger>
+          <TabsTrigger value="recherche" className="gap-1.5">
+            Recherche
+            {p.counts.research > 0 && (
+              <span className="rounded-full bg-muted px-1.5 py-0 text-[10px] tabular-nums">{p.counts.research}</span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="builds">Builds / PRs</TabsTrigger>
+          <TabsTrigger value="aenderungen" className="gap-1.5">
+            Änderungen
+            {(syncStatus?.pending_changes ?? 0) > 0 && (
+              <span className="rounded-full bg-brand px-1.5 py-0 text-[10px] tabular-nums text-brand-foreground">
+                {syncStatus!.pending_changes}
+              </span>
+            )}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="uebersicht" className="mt-4">
@@ -269,6 +322,10 @@ export function ProjectPage() {
         <TabsContent value="builds" className="mt-4">
           <PRReviewPanel projectId={p.id} />
         </TabsContent>
+
+        <TabsContent value="aenderungen" className="mt-4">
+          <ChangesReviewPanel projectId={p.id} />
+        </TabsContent>
       </Tabs>
 
       {/* Delete Project Confirmation */}
@@ -289,25 +346,31 @@ export function ProjectPage() {
         description="Die Verknüpfung wird entfernt. Die externe Quelle bleibt unverändert."
         confirmLabel="Entfernen"
         onConfirm={() => {
-          if (removeSourceId) {
-            success('Datenquelle entfernt', {
-              action: {
-                label: 'Rückgängig',
-                onClick: () => {
-                  // User clicked undo - source is still there
-                },
-              },
-              duration: 5000,
-            })
-
-            setTimeout(async () => {
-              try {
-                await removeSource(p.id, removeSourceId)
-              } catch (err) {
-                error('Fehler beim Entfernen der Quelle')
-              }
-            }, 5000)
+          if (!removeSourceId) {
+            setRemoveSourceId(null)
+            return
           }
+          const sourceId = removeSourceId
+          const pending = { timer: 0, cancelled: false }
+          pendingRemoveRef.current = pending
+          success('Datenquelle entfernt', {
+            action: {
+              label: 'Rückgängig',
+              onClick: () => {
+                pending.cancelled = true
+                window.clearTimeout(pending.timer)
+              },
+            },
+            duration: 5000,
+          })
+          pending.timer = window.setTimeout(async () => {
+            if (pending.cancelled) return
+            try {
+              await removeSource(p.id, sourceId)
+            } catch {
+              error('Fehler beim Entfernen der Quelle')
+            }
+          }, 5000)
           setRemoveSourceId(null)
         }}
       />
