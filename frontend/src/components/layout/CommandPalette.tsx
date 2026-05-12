@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Command } from 'cmdk'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { useViewTransitionNavigate } from '@/hooks/useViewTransition'
+import { useCommandPaletteStore } from '@/stores/commandPaletteStore'
 
 interface SearchResult {
   id: string
@@ -16,23 +16,25 @@ interface SearchResult {
 }
 
 export function CommandPalette() {
-  const [open, setOpen] = useState(false)
+  const open = useCommandPaletteStore((s) => s.open)
+  const setOpen = useCommandPaletteStore((s) => s.setOpen)
+  const toggle = useCommandPaletteStore((s) => s.toggle)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
-  const navigate = useNavigate()
+  const navigate = useViewTransitionNavigate()
 
   // Ctrl+K to toggle
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault()
-        setOpen((v) => !v)
+        toggle()
       }
       if (e.key === 'Escape') setOpen(false)
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [])
+  }, [toggle, setOpen])
 
   // Search on query change
   useEffect(() => {
