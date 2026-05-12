@@ -5,8 +5,13 @@ import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import Link from '@tiptap/extension-link'
 import Highlight from '@tiptap/extension-highlight'
+import { SlashCommand, createSlashSuggestion } from './editor/slashCommand'
+import { Mention, createMentionSuggestion } from './editor/mention'
+import { InlineAi } from './editor/inlineAi'
+import { InlineAiPopover } from './editor/InlineAiPopover'
 import { convertTaskListHTML } from '@/lib/taskUtils'
 import { cn } from '@/lib/utils'
+import 'tippy.js/dist/tippy.css'
 
 interface Props {
   content: string
@@ -39,6 +44,9 @@ export function RichTextEditor({ content, onChange, placeholder = 'Schreiben...'
       TaskItem.configure({ nested: true }),
       Link.configure({ openOnClick: false }),
       Highlight,
+      SlashCommand.configure({ suggestion: createSlashSuggestion() }),
+      Mention.configure({ suggestion: createMentionSuggestion() }),
+      InlineAi,
     ],
     content,
     onUpdate: ({ editor }) => {
@@ -113,6 +121,7 @@ export function RichTextEditor({ content, onChange, placeholder = 'Schreiben...'
         className="prose prose-sm prose-invert max-w-none px-4 py-3 focus:outline-none [&_.tiptap]:min-h-[120px] [&_.tiptap]:outline-none [&_.tiptap_h2]:text-lg [&_.tiptap_h2]:font-bold [&_.tiptap_h2]:my-3 [&_.tiptap_h3]:text-base [&_.tiptap_h3]:font-bold [&_.tiptap_h3]:my-2 [&_.tiptap_ul:not([class*='task'])]:list-disc [&_.tiptap_ul:not([class*='task'])]:pl-4 [&_.tiptap_ol]:list-decimal [&_.tiptap_ol]:pl-4 [&_.tiptap_li]:my-1 [&_.tiptap_p.is-editor-empty:first-child::before]:text-muted-foreground [&_.tiptap_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.tiptap_p.is-editor-empty:first-child::before]:float-left [&_.tiptap_p.is-editor-empty:first-child::before]:pointer-events-none [&_.tiptap_p.is-editor-empty:first-child::before]:h-0"
       />
     </div>
+    <InlineAiPopover editor={editor} />
     </>
   )
 }
