@@ -1,66 +1,123 @@
+import type { KeyboardEvent, MouseEvent } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { Badge } from '@/components/ui/badge'
-import { PRIORITY_LABELS } from '@/lib/types'
 import type { Todo } from '@/lib/types'
+import type { KanbanDensity } from '@/stores/todoStore'
 import { cn } from '@/lib/utils'
-
-const PRIORITY_COLORS: Record<string, string> = {
-  high: 'bg-red-500/20 text-red-400 border-red-500/30',
-  medium: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-  low: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-}
+import { MOTION } from '@/lib/design-system'
+import { PriorityBar } from './PriorityBar'
+import { DeadlineChip } from './DeadlineChip'
+import { AssigneeAvatar } from './AssigneeAvatar'
 
 interface Props {
   todo: Todo
   overlay?: boolean
+  density?: KanbanDensity
+  selected?: boolean
+  onSelectToggle?: (id: string, event: { shift: boolean; ctrlOrMeta: boolean }) => void
 }
 
-export function KanbanCard({ todo, overlay }: Props) {
+const PAD: Record<KanbanDensity, string> = {
+  compact: 'py-1.5 pl-3 pr-2',
+  comfortable: 'py-2.5 pl-3 pr-2.5',
+  spacious: 'py-3.5 pl-4 pr-3',
+}
+
+const GAP: Record<KanbanDensity, string> = {
+  compact: 'mt-1 gap-1',
+  comfortable: 'mt-2 gap-1.5',
+  spacious: 'mt-2.5 gap-2',
+}
+
+export function KanbanCard({ todo, overlay, density = 'comfortable', selected, onSelectToggle }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: todo.id,
     data: { type: 'todo', todo },
   })
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
+  const handleClick = (e: MouseEvent<HTMLDivElement>) => {
+    if (!onSelectToggle) return
+    if (e.shiftKey || e.ctrlKey || e.metaKey) {
+      e.preventDefault()
+      onSelectToggle(todo.id, { shift: e.shiftKey, ctrlOrMeta: e.ctrlKey || e.metaKey })
+    }
   }
 
-  const isOverdue = todo.deadline && new Date(todo.deadline) < new Date()
+  const handleKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (!onSelectToggle) return
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault()
+      onSelectToggle(todo.id, { shift: e.shiftKey, ctrlOrMeta: e.ctrlKey || e.metaKey })
+    }
+  }
+
+  const showDescription = density !== 'compact' && todo.description
+  const showTags = density !== 'compact' && todo.tags.length > 0
+  const visibleTags = todo.tags.slice(0, density === 'compact' ? 0 : 3)
+  const extraTags = todo.tags.length - visibleTags.length
 
   return (
     <div
       ref={setNodeRef}
-      style={style}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        viewTransitionName: overlay ? undefined : MOTION.viewTransitionName.card(todo.id),
+      }}
       {...attributes}
       {...listeners}
+      role="button"
+      tabIndex={overlay ? -1 : 0}
+      aria-label={`Todo: ${todo.title}`}
+      aria-selected={selected || undefined}
+      aria-grabbed={isDragging || undefined}
+      onClick={handleClick}
+      onKeyDown={handleKey}
       className={cn(
-        'cursor-grab rounded-lg border border-border bg-card p-3 shadow-sm transition-shadow hover:shadow-md',
+        'group relative cursor-grab select-none rounded-lg border bg-card shadow-sm',
+        'transition-[box-shadow,border-color,background-color] duration-[var(--motion-duration-fast)] ease-[var(--motion-ease-out)]',
+        'hover:shadow-md hover:border-border',
+        'outline-none focus-visible:ring-2 focus-visible:ring-brand/40',
+        PAD[density],
         isDragging && 'opacity-50',
-        overlay && 'shadow-lg ring-2 ring-primary/20'
+        overlay && 'shadow-lg ring-2 ring-brand/40',
+        selected
+          ? 'border-brand ring-2 ring-brand/30 bg-brand-subtle'
+          : 'border-border',
       )}
     >
-      <p className="text-sm font-medium leading-tight">{todo.title}</p>
+      <PriorityBar priority={todo.priority} />
 
-      {todo.description && (
-        <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{todo.description}</p>
+      <p className={cn(
+        'font-medium leading-tight pl-1',
+        density === 'compact' ? 'text-[13px]' : 'text-sm',
+      )}>
+        {todo.title}
+      </p>
+
+      {showDescription && (
+        <p className="mt-1 line-clamp-2 pl-1 text-xs text-muted-foreground">
+          {todo.description}
+        </p>
       )}
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <Badge variant="outline" className={cn('text-xs', PRIORITY_COLORS[todo.priority])}>
-          {PRIORITY_LABELS[todo.priority]}
-        </Badge>
+      <div className={cn('flex flex-wrap items-center pl-1', GAP[density])}>
+        {todo.deadline && <DeadlineChip deadline={todo.deadline} />}
 
-        {todo.deadline && (
-          <span className={cn('text-xs', isOverdue ? 'text-red-400' : 'text-muted-foreground')}>
-            {new Date(todo.deadline).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
-          </span>
+        {(todo.assignee || todo.assignee_id) && (
+          <AssigneeAvatar user={todo.assignee ?? undefined} userId={todo.assignee_id ?? null} />
         )}
 
-        {todo.tags.map((tag) => (
-          <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
+        {showTags && visibleTags.map((tag) => (
+          <Badge key={tag} variant="secondary" className="px-1.5 py-0 text-[10px] font-normal">
+            {tag}
+          </Badge>
         ))}
+
+        {showTags && extraTags > 0 && (
+          <span className="text-[10px] text-muted-foreground">+{extraTags}</span>
+        )}
       </div>
     </div>
   )

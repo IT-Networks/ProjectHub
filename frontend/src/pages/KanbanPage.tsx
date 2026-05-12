@@ -3,7 +3,6 @@ import { Plus } from 'lucide-react'
 import { KanbanBoard } from '@/components/kanban/KanbanBoard'
 import { useTodoStore } from '@/stores/todoStore'
 import { useProjectStore } from '@/stores/projectStore'
-import { useFavoritesStore } from '@/stores/favoritesStore'
 import { useToast } from '@/components/shared/Toast'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -22,7 +21,6 @@ export function KanbanPage() {
   const loading = useTodoStore((s) => s.loading)
   const projects = useProjectStore((s) => s.projects)
   const fetchProjects = useProjectStore((s) => s.fetchProjects)
-  const addRecentItem = useFavoritesStore((s) => s.addRecentItem)
   const { success, error } = useToast()
   const [createOpen, setCreateOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -31,8 +29,7 @@ export function KanbanPage() {
 
   useEffect(() => {
     fetchProjects()
-    addRecentItem('kanban', 'project', 'Kanban')
-  }, [fetchProjects, addRecentItem])
+  }, [fetchProjects])
 
   useEffect(() => {
     fetchTodos()
