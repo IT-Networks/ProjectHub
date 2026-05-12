@@ -65,6 +65,29 @@ async def init_db():
         except Exception:
             pass  # Column already exists
 
+        try:
+            await conn.execute(
+                __import__("sqlalchemy").text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_dedup "
+                    "ON knowledge_items(project_id, source_type, source_ref) "
+                    "WHERE source_ref IS NOT NULL"
+                )
+            )
+        except Exception:
+            pass
+
+        # Migrate: add sync-tracking fields to data_source_links (S1)
+        for ddl in (
+            "ALTER TABLE data_source_links ADD COLUMN last_synced_at TEXT",
+            "ALTER TABLE data_source_links ADD COLUMN last_sync_status TEXT DEFAULT 'idle'",
+            "ALTER TABLE data_source_links ADD COLUMN last_error_msg TEXT",
+            "ALTER TABLE data_source_links ADD COLUMN sync_enabled INTEGER DEFAULT 1",
+        ):
+            try:
+                await conn.execute(__import__("sqlalchemy").text(ddl))
+            except Exception:
+                pass  # Column already exists
+
 
 async def get_db() -> AsyncSession:
     """Dependency for FastAPI routes."""

@@ -6,6 +6,7 @@ from models.communication import LinkedMessage
 from models.research import ResearchResult
 from models.cache import OfflineCache
 from models.knowledge import KnowledgeItem, KnowledgeEdge, ProjectDocument
+from models.source_change import SourceChange, SyncRun
 
 __all__ = [
     "Project", "DataSourceLink",
@@ -16,4 +17,5 @@ __all__ = [
     "ResearchResult",
     "OfflineCache",
     "KnowledgeItem", "KnowledgeEdge", "ProjectDocument",
+    "SourceChange", "SyncRun",
 ]

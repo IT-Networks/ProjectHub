@@ -1,8 +1,9 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from config import settings
 from database import async_session
@@ -13,6 +14,12 @@ from services.sse_hub import sse_hub
 logger = logging.getLogger("projecthub.polling")
 
 _polling_task: asyncio.Task | None = None
+_periodic_sync_task: asyncio.Task | None = None
+
+# 30 min cadence for per-project sync (matches AUTO_SYNC_COOLDOWN_SECONDS)
+PERIODIC_SYNC_INTERVAL_S = 30 * 60
+# Stagger gap between projects so we don't saturate AI-Assist
+PER_PROJECT_STAGGER_S = 2
 
 
 async def _poll_cycle():
@@ -153,9 +160,77 @@ async def _polling_loop():
             logger.error("Polling-Fehler: %s", e)
 
 
+async def _sync_projects_with_sources() -> int:
+    """Trigger a sync run for every project that has at least one enabled source.
+
+    Runs sequentially with a small stagger so adapter I/O doesn't pile up.
+    Each per-project call re-uses `trigger_sync` semantics: cooldowns apply,
+    in-progress runs are skipped.
+    """
+    # Local import avoids circular deps (project_sync imports ai_assist too)
+    from routers.project_sync import _run_sync_for_project, _get_running_run, _get_last_run, _parse_iso, AUTO_SYNC_COOLDOWN_SECONDS
+    from models.source_change import SyncRun
+    import secrets
+
+    triggered = 0
+    async with async_session() as db:
+        # Distinct project_ids that have at least one enabled source
+        stmt = (
+            select(DataSourceLink.project_id)
+            .where(DataSourceLink.sync_enabled == 1)
+            .group_by(DataSourceLink.project_id)
+        )
+        project_ids = [row[0] for row in (await db.execute(stmt)).all()]
+
+    for pid in project_ids:
+        # Respect cooldown — same logic as the HTTP trigger endpoint
+        async with async_session() as db:
+            running = await _get_running_run(db, pid)
+            if running:
+                continue
+            last = await _get_last_run(db, pid)
+            if last and last.started_at:
+                dt = _parse_iso(last.started_at)
+                if dt:
+                    elapsed = (datetime.now(timezone.utc) - dt).total_seconds()
+                    if elapsed < AUTO_SYNC_COOLDOWN_SECONDS:
+                        continue
+            # Create run row
+            run = SyncRun(
+                id=secrets.token_hex(8),
+                project_id=pid,
+                trigger="periodic",
+                status="running",
+            )
+            db.add(run)
+            await db.commit()
+            run_id = run.id
+
+        # Kick off as a separate task so slow runs don't block others
+        asyncio.create_task(_run_sync_for_project(pid, "periodic", run_id))
+        triggered += 1
+        await asyncio.sleep(PER_PROJECT_STAGGER_S)
+
+    if triggered:
+        logger.info("Periodischer Sync gestartet für %d Projekt(e)", triggered)
+    return triggered
+
+
+async def _periodic_sync_loop():
+    """Background loop: every 30 min, trigger sync for all active projects."""
+    # Delay first run so the regular polling_loop goes first at startup
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await _sync_projects_with_sources()
+        except Exception as e:
+            logger.error("Periodischer Sync fehlgeschlagen: %s", e)
+        await asyncio.sleep(PERIODIC_SYNC_INTERVAL_S)
+
+
 def start_polling():
-    """Start the background polling task."""
-    global _polling_task
+    """Start the background polling + periodic-sync tasks."""
+    global _polling_task, _periodic_sync_task
     if not settings.polling_enabled:
         logger.info("Polling ist deaktiviert")
         return
@@ -163,13 +238,21 @@ def start_polling():
         logger.warning("Polling läuft bereits")
         return
     _polling_task = asyncio.create_task(_polling_loop())
-    logger.info("Polling gestartet (Intervall: %d Min.)", settings.polling_interval_minutes)
+    _periodic_sync_task = asyncio.create_task(_periodic_sync_loop())
+    logger.info(
+        "Polling gestartet (Status-Intervall: %d Min., Projekt-Sync: %d Min.)",
+        settings.polling_interval_minutes, PERIODIC_SYNC_INTERVAL_S // 60,
+    )
 
 
 def stop_polling():
-    """Stop the background polling task."""
-    global _polling_task
+    """Stop background tasks."""
+    global _polling_task, _periodic_sync_task
     if _polling_task and not _polling_task.done():
         _polling_task.cancel()
         logger.info("Polling gestoppt")
     _polling_task = None
+    if _periodic_sync_task and not _periodic_sync_task.done():
+        _periodic_sync_task.cancel()
+        logger.info("Periodischer Sync gestoppt")
+    _periodic_sync_task = None

@@ -77,7 +77,7 @@ export function useSSEConnection() {
       }
 
       // Listen to named events
-      for (const eventType of ['build_update', 'pr_update', 'queue_item', 'todo_update', 'ai_assist_status', 'polling_status']) {
+      for (const eventType of ['build_update', 'pr_update', 'queue_item', 'todo_update', 'ai_assist_status', 'polling_status', 'sync_complete']) {
         es.addEventListener(eventType, (e: MessageEvent) => {
           try {
             const data = JSON.parse(e.data)

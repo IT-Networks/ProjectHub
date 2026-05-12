@@ -50,6 +50,12 @@ class DataSourceLink(Base):
     # jenkins_job, github_repo, git_repo, jira_project, confluence_space, email_folder, webex_room
     source_config: Mapped[str] = mapped_column(Text, default="{}")  # JSON
     display_name: Mapped[str] = mapped_column(String(200), default="")
+    # Sync tracking (S1)
+    last_synced_at: Mapped[str | None] = mapped_column(String(30), nullable=True, default=None)
+    last_sync_status: Mapped[str] = mapped_column(String(20), default="idle")
+    # idle, in_progress, ok, error
+    last_error_msg: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    sync_enabled: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
 
     project: Mapped["Project"] = relationship(back_populates="sources")
