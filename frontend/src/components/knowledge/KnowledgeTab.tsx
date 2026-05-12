@@ -62,7 +62,7 @@ export function KnowledgeTab({ projectId }: KnowledgeTabProps) {
           {viewMode === 'graph' && (
             <KnowledgeGraphView projectId={projectId} height={Math.max(400, window.innerHeight - 340)} />
           )}
-          {viewMode === 'list' && <KnowledgeListView projectId={projectId} />}
+          {viewMode === 'list' && <KnowledgeListView projectId={projectId} onAdd={handleAdd} />}
           {viewMode === 'split' && <KnowledgeSplitView projectId={projectId} />}
         </div>
 

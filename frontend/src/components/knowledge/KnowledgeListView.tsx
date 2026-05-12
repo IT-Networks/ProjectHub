@@ -1,7 +1,10 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, type KeyboardEvent } from 'react'
+import { Plus } from 'lucide-react'
 import { useKnowledgeStore } from '@/stores/knowledgeStore'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/shared/EmptyState'
 import {
   CATEGORY_LABELS,
   CATEGORY_COLORS,
@@ -13,9 +16,10 @@ import type { KnowledgeItem, KnowledgeCategory, KnowledgeSourceType, Confidence 
 interface KnowledgeListViewProps {
   projectId: string
   compact?: boolean
+  onAdd?: () => void
 }
 
-export function KnowledgeListView({ projectId, compact = false }: KnowledgeListViewProps) {
+export function KnowledgeListView({ projectId, compact = false, onAdd }: KnowledgeListViewProps) {
   const items = useKnowledgeStore((s) => s.items)
   const searchResults = useKnowledgeStore((s) => s.searchResults)
   const searchQuery = useKnowledgeStore((s) => s.searchQuery)
@@ -42,18 +46,34 @@ export function KnowledgeListView({ projectId, compact = false }: KnowledgeListV
     fetchItemDetail(projectId, item.id)
   }
 
+  const handleKey = (e: KeyboardEvent<HTMLDivElement>, item: KnowledgeItem) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      handleClick(item)
+    }
+  }
+
   if (loading && items.length === 0) {
     return <div className="p-4 text-sm text-muted-foreground">Laden...</div>
   }
 
   if (displayItems.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center p-8 text-center text-muted-foreground">
-        <div>
-          <p className="text-lg">Kein Wissen erfasst</p>
-          <p className="mt-1 text-sm">Erstelle Wissenseinträge, um das Projekt-Gehirn aufzubauen.</p>
-        </div>
-      </div>
+      <EmptyState
+        icon="🧠"
+        title={searchQuery ? 'Keine Treffer' : 'Kein Wissen erfasst'}
+        description={
+          searchQuery
+            ? `Für „${searchQuery}" wurden keine Einträge gefunden.`
+            : 'Erstelle Wissenseinträge, um das Projekt-Gehirn aufzubauen. Notizen, Recherchen und Dokumente landen hier strukturiert.'
+        }
+        action={
+          onAdd && !searchQuery ? (
+            <Button onClick={onAdd} icon={<Plus className="w-4 h-4" />}>Wissen hinzufügen</Button>
+          ) : undefined
+        }
+        size="spacious"
+      />
     )
   }
 
@@ -62,10 +82,15 @@ export function KnowledgeListView({ projectId, compact = false }: KnowledgeListV
       {displayItems.map((item) => (
         <Card
           key={item.id}
-          className={`cursor-pointer p-3 transition-colors hover:bg-muted/50 ${
+          role="button"
+          tabIndex={0}
+          aria-label={`Wissen: ${item.title}`}
+          aria-pressed={selectedItemId === item.id}
+          onClick={() => handleClick(item)}
+          onKeyDown={(e) => handleKey(e, item)}
+          className={`cursor-pointer p-3 transition-colors outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-brand/40 ${
             selectedItemId === item.id ? 'ring-2 ring-primary' : ''
           }`}
-          onClick={() => handleClick(item)}
         >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">

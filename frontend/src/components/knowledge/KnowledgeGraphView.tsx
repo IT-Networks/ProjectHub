@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useMemo } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useMemo, useState } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import { useKnowledgeStore } from '@/stores/knowledgeStore'
 import { CATEGORY_COLORS } from '@/lib/types'
@@ -23,10 +23,22 @@ export function KnowledgeGraphView({ projectId, height = 500 }: KnowledgeGraphVi
   const setSelectedItem = useKnowledgeStore((s) => s.setSelectedItem)
   const fetchItemDetail = useKnowledgeStore((s) => s.fetchItemDetail)
   const graphRef = useRef<any>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(0)
 
   useEffect(() => {
     fetchGraph(projectId)
   }, [projectId, fetchGraph])
+
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const update = () => setWidth(el.clientWidth)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   // Transform data for react-force-graph-2d
   const forceData = useMemo(() => {
@@ -146,21 +158,27 @@ export function KnowledgeGraphView({ projectId, height = 500 }: KnowledgeGraphVi
   }
 
   return (
-    <div className="rounded-lg border border-border bg-background" style={{ height }}>
-      <ForceGraph2D
-        ref={graphRef}
-        graphData={forceData}
-        width={undefined}
-        height={height}
-        nodeCanvasObject={nodeCanvasObject}
-        linkCanvasObject={linkCanvasObject}
-        onNodeClick={handleNodeClick}
-        nodeLabel={(node: any) => `${node.title} [${node.category}]`}
-        cooldownTicks={100}
-        d3AlphaDecay={0.05}
-        d3VelocityDecay={0.3}
-        backgroundColor="transparent"
-      />
+    <div
+      ref={containerRef}
+      className="relative overflow-hidden rounded-lg border border-border bg-background"
+      style={{ height }}
+    >
+      {width > 0 && (
+        <ForceGraph2D
+          ref={graphRef}
+          graphData={forceData}
+          width={width}
+          height={height}
+          nodeCanvasObject={nodeCanvasObject}
+          linkCanvasObject={linkCanvasObject}
+          onNodeClick={handleNodeClick}
+          nodeLabel={(node: any) => `${node.title} [${node.category}]`}
+          cooldownTicks={100}
+          d3AlphaDecay={0.05}
+          d3VelocityDecay={0.3}
+          backgroundColor="transparent"
+        />
+      )}
     </div>
   )
 }

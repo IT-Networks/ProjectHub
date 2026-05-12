@@ -47,15 +47,6 @@ export function NodeDetailPanel({ projectId, onEdit, onClose }: NodeDetailPanelP
     fetchItemDetail(projectId, id)
   }
 
-  const handleSyncKnowledgeToNote = async () => {
-    try {
-      const syncKnowledgeToNote = useKnowledgeStore.getState().syncKnowledgeToNote
-      await syncKnowledgeToNote(projectId, item.id)
-    } catch (err) {
-      console.error('Sync failed:', err)
-    }
-  }
-
   return (
     <div className="w-80 shrink-0 overflow-y-auto rounded-lg border border-border bg-card p-4">
       {/* Header */}
@@ -182,11 +173,6 @@ export function NodeDetailPanel({ projectId, onEdit, onClose }: NodeDetailPanelP
             Löschen
           </Button>
         </div>
-        {item.source_note_id && (
-          <Button variant="secondary" size="sm" className="w-full" onClick={handleSyncKnowledgeToNote}>
-            ↑ Änderungen in Notiz übernehmen
-          </Button>
-        )}
       </div>
 
       <ConfirmDialog

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import secrets
@@ -6,6 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, func, text, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
@@ -13,6 +15,7 @@ from models.knowledge import KnowledgeItem, KnowledgeEdge, ProjectDocument
 from models.note import Note
 from models.research import ResearchResult
 from models.project import Project
+from models.communication import LinkedMessage
 from services.ai_assist_client import ai_assist
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
@@ -89,6 +92,9 @@ class KnowledgeItemResponse(BaseModel):
     confidence: str
     metadata: dict
     is_pinned: bool
+    source_note_id: str | None
+    sync_status: str
+    last_synced_at: str | None
     created_at: str
     updated_at: str
 
@@ -160,6 +166,9 @@ def _item_to_response(item: KnowledgeItem) -> KnowledgeItemResponse:
         confidence=item.confidence,
         metadata=json.loads(item.extra_data) if item.extra_data else {},
         is_pinned=bool(item.is_pinned),
+        source_note_id=item.source_note_id,
+        sync_status=item.sync_status,
+        last_synced_at=item.last_synced_at,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
@@ -210,59 +219,6 @@ async def list_items(
     query = query.limit(limit).offset(offset)
     result = await db.execute(query)
     return [_item_to_response(item) for item in result.scalars().all()]
-
-
-@router.get("/{project_id}/{item_id}")
-async def get_item(
-    project_id: str, item_id: str, db: AsyncSession = Depends(get_db)
-) -> KnowledgeItemDetailResponse:
-    result = await db.execute(
-        select(KnowledgeItem).where(
-            KnowledgeItem.id == item_id,
-            KnowledgeItem.project_id == project_id,
-        )
-    )
-    item = result.scalar_one_or_none()
-    if not item:
-        raise HTTPException(404, "Knowledge Item nicht gefunden")
-
-    # Get edges (both directions)
-    edges_result = await db.execute(
-        select(KnowledgeEdge).where(
-            or_(
-                KnowledgeEdge.source_item_id == item_id,
-                KnowledgeEdge.target_item_id == item_id,
-            )
-        )
-    )
-    edges = edges_result.scalars().all()
-
-    # Get neighbor items
-    neighbor_ids = set()
-    for e in edges:
-        if e.source_item_id != item_id:
-            neighbor_ids.add(e.source_item_id)
-        if e.target_item_id != item_id:
-            neighbor_ids.add(e.target_item_id)
-
-    neighbors = []
-    if neighbor_ids:
-        nb_result = await db.execute(
-            select(KnowledgeItem).where(KnowledgeItem.id.in_(neighbor_ids))
-        )
-        for nb in nb_result.scalars().all():
-            neighbors.append({
-                "id": nb.id,
-                "title": nb.title,
-                "category": nb.category,
-            })
-
-    resp = _item_to_response(item)
-    return KnowledgeItemDetailResponse(
-        **resp.model_dump(),
-        edges=[_edge_to_response(e) for e in edges],
-        neighbors=neighbors,
-    )
 
 
 @router.post("/{project_id}", status_code=201)
@@ -339,6 +295,25 @@ async def update_item(
         item.is_pinned = data.is_pinned
 
     item.updated_at = _now()
+
+    if item.source_note_id:
+        note_result = await db.execute(
+            select(Note).where(
+                Note.id == item.source_note_id,
+                Note.project_id == project_id,
+            )
+        )
+        note = note_result.scalar_one_or_none()
+        if note:
+            note.title = item.title
+            note.content = item.content
+            note.updated_at = _now()
+            item.sync_status = "synced"
+            item.last_synced_at = _now()
+        else:
+            item.sync_status = "conflict"
+            item.last_synced_at = _now()
+
     await db.commit()
     await db.refresh(item)
 
@@ -361,6 +336,21 @@ async def delete_item(
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Knowledge Item nicht gefunden")
+
+    if item.source_note_id:
+        note_result = await db.execute(
+            select(Note).where(
+                Note.id == item.source_note_id,
+                Note.project_id == project_id,
+            )
+        )
+        note = note_result.scalar_one_or_none()
+        if note:
+            linked_ids = json.loads(note.linked_knowledge_ids) if note.linked_knowledge_ids else []
+            if item_id in linked_ids:
+                linked_ids.remove(item_id)
+                note.linked_knowledge_ids = json.dumps(linked_ids)
+                note.updated_at = _now()
 
     # FTS cleanup
     await _fts_delete(db, item_id)
@@ -465,6 +455,9 @@ async def search_items(
             category=row.category,
             source_type=row.source_type,
             source_ref=row.source_ref,
+            source_note_id=row.source_note_id,
+            sync_status=row.sync_status,
+            last_synced_at=row.last_synced_at,
             tags=json.loads(row.tags) if row.tags else [],
             confidence=row.confidence,
             metadata=json.loads(row.extra_data) if row.extra_data else {},
@@ -741,6 +734,62 @@ async def validate_docs_path(
     return {"valid": True, "file_count": file_count, "total_size": total_size}
 
 
+# --- Item Detail (wildcard route — registered AFTER all literal-path GETs
+# so /graph, /stats, /search, /documents, /validate-docs-path are not shadowed) ---
+
+@router.get("/{project_id}/{item_id}")
+async def get_item(
+    project_id: str, item_id: str, db: AsyncSession = Depends(get_db)
+) -> KnowledgeItemDetailResponse:
+    result = await db.execute(
+        select(KnowledgeItem).where(
+            KnowledgeItem.id == item_id,
+            KnowledgeItem.project_id == project_id,
+        )
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Knowledge Item nicht gefunden")
+
+    # Get edges (both directions)
+    edges_result = await db.execute(
+        select(KnowledgeEdge).where(
+            or_(
+                KnowledgeEdge.source_item_id == item_id,
+                KnowledgeEdge.target_item_id == item_id,
+            )
+        )
+    )
+    edges = edges_result.scalars().all()
+
+    # Get neighbor items
+    neighbor_ids = set()
+    for e in edges:
+        if e.source_item_id != item_id:
+            neighbor_ids.add(e.source_item_id)
+        if e.target_item_id != item_id:
+            neighbor_ids.add(e.target_item_id)
+
+    neighbors = []
+    if neighbor_ids:
+        nb_result = await db.execute(
+            select(KnowledgeItem).where(KnowledgeItem.id.in_(neighbor_ids))
+        )
+        for nb in nb_result.scalars().all():
+            neighbors.append({
+                "id": nb.id,
+                "title": nb.title,
+                "category": nb.category,
+            })
+
+    resp = _item_to_response(item)
+    return KnowledgeItemDetailResponse(
+        **resp.model_dump(),
+        edges=[_edge_to_response(e) for e in edges],
+        neighbors=neighbors,
+    )
+
+
 # --- Document Scan ---
 
 class ScanDocsRequest(BaseModel):
@@ -802,6 +851,21 @@ async def research_to_knowledge(
     """Research a topic via AI-Assist and save result as Knowledge Item."""
     await _ensure_project(db, project_id)
 
+    topic_norm = (data.topic or "").strip().lower()
+    ref_basis = f"{project_id}|ai-research|{topic_norm}"
+    source_ref_hash = hashlib.sha256(ref_basis.encode("utf-8")).hexdigest()
+
+    pre_existing = await db.execute(
+        select(KnowledgeItem).where(
+            KnowledgeItem.project_id == project_id,
+            KnowledgeItem.source_type == "research",
+            KnowledgeItem.source_ref == source_ref_hash,
+        )
+    )
+    pre_existing_item = pre_existing.scalar_one_or_none()
+    if pre_existing_item:
+        return _item_to_response(pre_existing_item)
+
     if not ai_assist.is_connected:
         await ai_assist.health_check()
     if not ai_assist.is_connected:
@@ -823,19 +887,31 @@ async def research_to_knowledge(
     full_query = f"{context}\n[Recherche-Anfrage]\n{data.topic}"
 
     session_id = f"projecthub-kb-research-{_gen_id()}"
-    result_data = await ai_assist.post("/api/chat", {
-        "session_id": session_id,
-        "message": full_query,
-    })
+    result_data = await ai_assist.agent_call(
+        session_id=session_id,
+        message=full_query,
+    )
 
     response_text = ""
-    if result_data and "response" in result_data:
-        response_text = result_data["response"]
-    elif result_data:
-        response_text = str(result_data)
+    if result_data:
+        response_text = result_data.get("response") or ""
 
     if not response_text:
         raise HTTPException(502, "Leere Antwort von AI-Assist")
+
+    # Re-check for duplicates that may have been created while the LLM was running
+    # (narrows the race window between pre_existing check and the insert below).
+    race_check = await db.execute(
+        select(KnowledgeItem).where(
+            KnowledgeItem.project_id == project_id,
+            KnowledgeItem.source_type == "research",
+            KnowledgeItem.source_ref == source_ref_hash,
+        )
+    )
+    race_existing = race_check.scalar_one_or_none()
+    if race_existing:
+        logger.info("Research duplicate detected after LLM call, returning existing item")
+        return _item_to_response(race_existing)
 
     # Try to extract tags via LLM (quick)
     tags = _extract_tags_from_text(data.topic + " " + response_text[:500])
@@ -849,14 +925,28 @@ async def research_to_knowledge(
         content_plain=content_plain[:5000],
         category="reference",
         source_type="research",
-        source_ref=session_id,
+        source_ref=source_ref_hash,
         tags=json.dumps(tags),
         confidence="medium",
-        extra_data=json.dumps({"topic": data.topic, "team": data.team}),
+        extra_data=json.dumps({"topic": data.topic, "team": data.team, "session_id": session_id}),
     )
-    db.add(item)
-    await db.commit()
-    await db.refresh(item)
+    try:
+        db.add(item)
+        await db.commit()
+        await db.refresh(item)
+    except IntegrityError:
+        await db.rollback()
+        existing_result = await db.execute(
+            select(KnowledgeItem).where(
+                KnowledgeItem.project_id == project_id,
+                KnowledgeItem.source_type == "research",
+                KnowledgeItem.source_ref == source_ref_hash,
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+        if existing:
+            return _item_to_response(existing)
+        raise
     await _fts_insert(db, item)
 
     # Auto-link to items with overlapping tags
@@ -968,6 +1058,23 @@ async def import_note(
     if not note:
         raise HTTPException(404, "Notiz nicht gefunden")
 
+    existing_result = await db.execute(
+        select(KnowledgeItem).where(
+            KnowledgeItem.project_id == project_id,
+            KnowledgeItem.source_note_id == note.id,
+            KnowledgeItem.source_type == "note_import",
+        )
+    )
+    existing_item = existing_result.scalar_one_or_none()
+    if existing_item:
+        linked_ids = json.loads(note.linked_knowledge_ids) if note.linked_knowledge_ids else []
+        if existing_item.id not in linked_ids:
+            linked_ids.append(existing_item.id)
+            note.linked_knowledge_ids = json.dumps(linked_ids)
+            note.updated_at = _now()
+            await db.commit()
+        return _item_to_response(existing_item)
+
     content_plain = _strip_html(note.content) if note.content else ""
     tags = json.loads(note.tags) if note.tags else []
 
@@ -980,7 +1087,7 @@ async def import_note(
         category="reference",
         source_type="note_import",
         source_ref=note.id,
-        source_note_id=note.id,  # Link to source note for bidirectional sync
+        source_note_id=note.id,
         sync_status="synced",
         last_synced_at=_now(),
         tags=json.dumps(tags),
@@ -991,11 +1098,11 @@ async def import_note(
     await db.commit()
     await db.refresh(item)
 
-    # Add knowledge item ID to note's linked_knowledge_ids
     linked_ids = json.loads(note.linked_knowledge_ids) if note.linked_knowledge_ids else []
     if item.id not in linked_ids:
         linked_ids.append(item.id)
         note.linked_knowledge_ids = json.dumps(linked_ids)
+        note.updated_at = _now()
         await db.commit()
 
     await _fts_insert(db, item)
@@ -1027,6 +1134,17 @@ async def import_research(
     if not research:
         raise HTTPException(404, "Recherche nicht gefunden")
 
+    existing_result = await db.execute(
+        select(KnowledgeItem).where(
+            KnowledgeItem.project_id == project_id,
+            KnowledgeItem.source_type == "research",
+            KnowledgeItem.source_ref == research.id,
+        )
+    )
+    existing = existing_result.scalar_one_or_none()
+    if existing:
+        return _item_to_response(existing)
+
     content_plain = _strip_html(research.result) if "<" in research.result else research.result
     tags = _extract_tags_from_text(research.query + " " + content_plain[:500])
 
@@ -1056,6 +1174,46 @@ async def import_research(
     return _item_to_response(item)
 
 
+@router.get("/{project_id}/imports/research")
+async def list_imported_research(
+    project_id: str, db: AsyncSession = Depends(get_db)
+) -> list[str]:
+    """Return research_ids that have already been imported as KnowledgeItems."""
+    await _ensure_project(db, project_id)
+    result = await db.execute(
+        select(KnowledgeItem.source_ref).where(
+            KnowledgeItem.project_id == project_id,
+            KnowledgeItem.source_type == "research",
+            KnowledgeItem.source_ref.isnot(None),
+        )
+    )
+    return [row[0] for row in result.all() if row[0]]
+
+
+@router.get("/{project_id}/imports/messages")
+async def list_imported_messages(
+    project_id: str, db: AsyncSession = Depends(get_db)
+) -> list[dict]:
+    """Return messages already extracted into knowledge for this project."""
+    await _ensure_project(db, project_id)
+    result = await db.execute(
+        select(KnowledgeItem).where(
+            KnowledgeItem.project_id == project_id,
+            KnowledgeItem.source_type.in_(["email_extract", "chat_extract"]),
+        )
+    )
+    out = []
+    for item in result.scalars().all():
+        meta = json.loads(item.extra_data) if item.extra_data else {}
+        out.append({
+            "item_id": item.id,
+            "source": meta.get("source", ""),
+            "external_id": meta.get("external_id"),
+            "source_ref": item.source_ref,
+        })
+    return out
+
+
 # --- Extract: Email/Chat → Knowledge ---
 
 class ExtractMessageRequest(BaseModel):
@@ -1063,6 +1221,7 @@ class ExtractMessageRequest(BaseModel):
     sender: str
     content: str
     source: str = "email"  # email or webex
+    external_id: str | None = None
 
 
 @router.post("/{project_id}/extract/message")
@@ -1077,6 +1236,23 @@ async def extract_from_message(
 
     source_type = "email_extract" if data.source == "email" else "chat_extract"
 
+    if data.external_id:
+        ref_basis = f"{project_id}|{data.source}|{data.external_id}"
+    else:
+        ref_basis = f"{project_id}|{data.source}|{data.sender}|{data.subject}|{content_plain[:500]}"
+    source_ref_hash = hashlib.sha256(ref_basis.encode("utf-8")).hexdigest()
+
+    existing_result = await db.execute(
+        select(KnowledgeItem).where(
+            KnowledgeItem.project_id == project_id,
+            KnowledgeItem.source_type == source_type,
+            KnowledgeItem.source_ref == source_ref_hash,
+        )
+    )
+    existing = existing_result.scalar_one_or_none()
+    if existing:
+        return _item_to_response(existing)
+
     item = KnowledgeItem(
         id=_gen_id(),
         project_id=project_id,
@@ -1085,15 +1261,31 @@ async def extract_from_message(
         content_plain=f"Von: {data.sender}\n{content_plain}"[:5000],
         category="reference",
         source_type=source_type,
-        source_ref=None,
+        source_ref=source_ref_hash,
         tags=json.dumps(tags),
         confidence="low",
-        extra_data=json.dumps({"sender": data.sender, "source": data.source}),
+        extra_data=json.dumps({"sender": data.sender, "source": data.source, "external_id": data.external_id} if data.external_id else {"sender": data.sender, "source": data.source}),
     )
     db.add(item)
     await db.commit()
     await db.refresh(item)
     await _fts_insert(db, item)
+
+    try:
+        link = LinkedMessage(
+            id=_gen_id(),
+            link_target="knowledge",
+            target_id=item.id,
+            source=data.source,
+            source_ref=source_ref_hash,
+            subject=data.subject[:500] if data.subject else "",
+            sender=data.sender[:200] if data.sender else "",
+            snippet=content_plain[:300],
+        )
+        db.add(link)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
 
     return _item_to_response(item)
 
@@ -1152,8 +1344,8 @@ def _extract_tags_from_text(text_input: str, max_tags: int = 5) -> list[str]:
 
 # --- FTS5 Helpers ---
 
-async def _fts_insert(db: AsyncSession, item: KnowledgeItem):
-    """Insert item into FTS5 index."""
+async def _fts_insert(db: AsyncSession, item: KnowledgeItem) -> bool:
+    """Insert item into FTS5 index. Returns True on success, False on failure (logged)."""
     try:
         # Get rowid
         result = await db.execute(
@@ -1173,13 +1365,16 @@ async def _fts_insert(db: AsyncSession, item: KnowledgeItem):
                 "tags": tags_text,
             })
             await db.commit()
+            return True
+        return False
     except Exception as e:
-        logger.warning("FTS insert failed: %s", e)
+        logger.warning("FTS insert failed for item %s: %s", item.id, e)
+        return False
 
 
-async def _fts_update(db: AsyncSession, item: KnowledgeItem):
-    """Update item in FTS5 index."""
-    await _fts_insert(db, item)  # INSERT OR REPLACE handles update
+async def _fts_update(db: AsyncSession, item: KnowledgeItem) -> bool:
+    """Update item in FTS5 index. Returns True on success."""
+    return await _fts_insert(db, item)  # INSERT OR REPLACE handles update
 
 
 async def _fts_delete(db: AsyncSession, item_id: str):

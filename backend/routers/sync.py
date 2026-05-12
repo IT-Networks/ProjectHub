@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from models.knowledge import KnowledgeItem
 from models.note import Note
+from routers.knowledge import _fts_update
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 
@@ -71,6 +72,10 @@ async def sync_note_to_knowledge(
         # Note: FTS update moved to knowledge router for dependency isolation
 
     await db.commit()
+
+    for item in items:
+        await _fts_update(db, item)
+
     return {"synced_count": len(items)}
 
 

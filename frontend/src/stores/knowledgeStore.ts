@@ -135,19 +135,24 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => ({
   },
 
   updateItem: async (projectId, itemId, data) => {
+    const updated = await api.put<KnowledgeItem>(`/knowledge/${projectId}/${itemId}`, data)
     set((s) => ({
-      items: s.items.map((i) => (i.id === itemId ? { ...i, ...data } : i)),
+      items: s.items.map((i) => (i.id === itemId ? updated : i)),
+      selectedItemDetail: s.selectedItemDetail?.id === itemId ? { ...s.selectedItemDetail, ...updated } : s.selectedItemDetail,
     }))
-    await api.put(`/knowledge/${projectId}/${itemId}`, data)
+
+    if (updated.source_note_id) {
+      await get().syncKnowledgeToNote(projectId, itemId)
+    }
   },
 
   deleteItem: async (projectId, itemId) => {
+    await api.del(`/knowledge/${projectId}/${itemId}`)
     set((s) => ({
       items: s.items.filter((i) => i.id !== itemId),
       selectedItemId: s.selectedItemId === itemId ? null : s.selectedItemId,
       selectedItemDetail: s.selectedItemId === itemId ? null : s.selectedItemDetail,
     }))
-    await api.del(`/knowledge/${projectId}/${itemId}`)
   },
 
   createEdge: async (projectId, data) => {
@@ -189,7 +194,7 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => ({
 
   importNote: async (projectId, noteId) => {
     const item = await api.post<KnowledgeItem>(`/knowledge/${projectId}/import/note`, { note_id: noteId })
-    set((s) => ({ items: [item, ...s.items] }))
+    set((s) => ({ items: [item, ...s.items.filter((existing) => existing.id !== item.id)] }))
     return item
   },
 
@@ -200,28 +205,21 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => ({
   },
 
   syncNoteToKnowledge: async (projectId, noteId, content, title) => {
-    // Update all knowledge items linked to this note
-    set((s) => ({
-      items: s.items.map((i) =>
-        i.source_note_id === noteId
-          ? { ...i, content, title, sync_status: 'synced', last_synced_at: new Date().toISOString() }
-          : i
-      ),
-    }))
     await api.post(`/sync/note-to-knowledge`, { project_id: projectId, note_id: noteId, content, title })
+    await get().fetchItems(projectId)
+    if (get().selectedItemId) {
+      await get().fetchItemDetail(projectId, get().selectedItemId as string)
+    }
   },
 
   syncKnowledgeToNote: async (projectId, itemId) => {
-    // Get the knowledge item and sync back to note
     const item = get().items.find((i) => i.id === itemId)
-    if (item?.source_note_id) {
-      await api.post(`/sync/knowledge-to-note`, { project_id: projectId, item_id: itemId })
-      // Update item sync status
-      set((s) => ({
-        items: s.items.map((i) =>
-          i.id === itemId ? { ...i, sync_status: 'synced', last_synced_at: new Date().toISOString() } : i
-        ),
-      }))
+    if (!item?.source_note_id) return
+
+    await api.post(`/sync/knowledge-to-note`, { project_id: projectId, item_id: itemId })
+    await get().fetchItems(projectId)
+    if (get().selectedItemId === itemId) {
+      await get().fetchItemDetail(projectId, itemId)
     }
   },
 
