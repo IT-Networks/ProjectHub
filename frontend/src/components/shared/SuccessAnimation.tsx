@@ -28,6 +28,18 @@ export function SuccessAnimation({
     }
   }, [show, duration, onComplete])
 
+  // Particle config for the confetti variant — generated once via a lazy
+  // state initializer so the render itself stays pure (Math.random() is
+  // impure and must not run during render).
+  const [confetti] = useState(() =>
+    Array.from({ length: 30 }, () => ({
+      left: `${Math.random() * 100}%`,
+      color: ['#10b981', '#34d399', '#6ee7b7'][Math.floor(Math.random() * 3)],
+      duration: `${2 + Math.random()}s`,
+      delay: `${Math.random() * 0.2}s`,
+    })),
+  )
+
   if (!isVisible) return null
 
   if (type === 'checkmark') {
@@ -51,18 +63,16 @@ export function SuccessAnimation({
   if (type === 'confetti') {
     return (
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        {Array.from({ length: 30 }).map((_, i) => (
+        {confetti.map((p, i) => (
           <div
             key={i}
             className="absolute w-2 h-2 rounded-full animate-out fade-out slide-out-to-bottom"
             style={{
-              left: `${Math.random() * 100}%`,
+              left: p.left,
               top: '-10px',
-              backgroundColor: ['#10b981', '#34d399', '#6ee7b7'][
-                Math.floor(Math.random() * 3)
-              ],
-              animation: `fall ${2 + Math.random()}s linear forwards`,
-              animationDelay: `${Math.random() * 0.2}s`,
+              backgroundColor: p.color,
+              animation: `fall ${p.duration} linear forwards`,
+              animationDelay: p.delay,
             }}
           />
         ))}

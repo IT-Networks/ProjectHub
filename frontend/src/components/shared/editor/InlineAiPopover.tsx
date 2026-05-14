@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Sparkles, Wand2, Minimize2, Maximize2, Languages, X, Check, Loader2 } from 'lucide-react'
 import type { Editor } from '@tiptap/react'
 import { streamAiGenerate, type AiStreamRequest } from '@/lib/aiStream'
@@ -48,6 +48,17 @@ export function InlineAiPopover({ editor }: Props) {
     return () => window.removeEventListener(INLINE_AI_EVENT, handler)
   }, [editor])
 
+  const close = useCallback(() => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    setSelection(null)
+    setAnchor(null)
+    setMode(null)
+    setResult('')
+    setError(null)
+    setStreaming(false)
+  }, [])
+
   useEffect(() => {
     if (!selection) return
     const onKey = (e: KeyboardEvent) => {
@@ -68,18 +79,7 @@ export function InlineAiPopover({ editor }: Props) {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('mousedown', onClick)
     }
-  }, [selection, streaming])
-
-  const close = () => {
-    abortRef.current?.abort()
-    abortRef.current = null
-    setSelection(null)
-    setAnchor(null)
-    setMode(null)
-    setResult('')
-    setError(null)
-    setStreaming(false)
-  }
+  }, [selection, streaming, close])
 
   const runAction = async (m: Mode) => {
     if (!selection) return

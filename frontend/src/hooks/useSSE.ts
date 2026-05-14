@@ -107,7 +107,9 @@ export function useSSEConnection() {
 export function useSSEEvent(eventType: string, handler: SSEListener) {
   const { addListener, removeListener } = useSSEStore()
   const handlerRef = useRef(handler)
-  handlerRef.current = handler
+  useEffect(() => {
+    handlerRef.current = handler
+  }, [handler])
 
   const stableHandler = useCallback((data: unknown) => {
     handlerRef.current(data)
