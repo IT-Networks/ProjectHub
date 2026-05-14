@@ -144,6 +144,7 @@ export type WidgetType =
   | 'inbox_preview'
   | 'research_history'
   | 'deadline_calendar'
+  | 'knowledge'
 
 export interface WidgetConfig {
   id: string

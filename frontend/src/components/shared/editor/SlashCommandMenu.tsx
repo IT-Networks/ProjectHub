@@ -34,8 +34,9 @@ export const SLASH_ITEMS: SlashItem[] = [
     section: 'Basis',
     icon: Heading2,
     keywords: ['h2', 'heading', 'überschrift'],
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).setNode('heading', { level: 2 }).run(),
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).setNode('heading', { level: 2 }).run()
+    },
   },
   {
     id: 'h3',
@@ -44,8 +45,9 @@ export const SLASH_ITEMS: SlashItem[] = [
     section: 'Basis',
     icon: Heading3,
     keywords: ['h3', 'heading', 'überschrift'],
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).setNode('heading', { level: 3 }).run(),
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).setNode('heading', { level: 3 }).run()
+    },
   },
   {
     id: 'bulletList',
@@ -54,8 +56,9 @@ export const SLASH_ITEMS: SlashItem[] = [
     section: 'Basis',
     icon: List,
     keywords: ['list', 'liste', 'aufzählung', 'bullet'],
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).toggleBulletList().run(),
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).toggleBulletList().run()
+    },
   },
   {
     id: 'orderedList',
@@ -64,8 +67,9 @@ export const SLASH_ITEMS: SlashItem[] = [
     section: 'Basis',
     icon: ListOrdered,
     keywords: ['ol', 'nummer', 'ordered'],
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).toggleOrderedList().run(),
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).toggleOrderedList().run()
+    },
   },
   {
     id: 'taskList',
@@ -74,8 +78,9 @@ export const SLASH_ITEMS: SlashItem[] = [
     section: 'Basis',
     icon: ListTodo,
     keywords: ['task', 'todo', 'aufgabe', 'checkbox'],
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).toggleTaskList().run(),
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).toggleTaskList().run()
+    },
   },
   {
     id: 'codeBlock',
@@ -84,8 +89,9 @@ export const SLASH_ITEMS: SlashItem[] = [
     section: 'Basis',
     icon: Code2,
     keywords: ['code', 'pre'],
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).toggleCodeBlock().run(),
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).toggleCodeBlock().run()
+    },
   },
   {
     id: 'blockquote',
@@ -94,8 +100,9 @@ export const SLASH_ITEMS: SlashItem[] = [
     section: 'Basis',
     icon: Quote,
     keywords: ['quote', 'zitat'],
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).toggleBlockquote().run(),
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).toggleBlockquote().run()
+    },
   },
   {
     id: 'hr',
@@ -104,8 +111,9 @@ export const SLASH_ITEMS: SlashItem[] = [
     section: 'Basis',
     icon: Minus,
     keywords: ['hr', 'line', 'trenn'],
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).setHorizontalRule().run(),
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).setHorizontalRule().run()
+    },
   },
   {
     id: 'ai-continue',

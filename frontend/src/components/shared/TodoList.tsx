@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Checkbox } from '@/components/shared/Checkbox'
 import { BatchActionsToolbar } from '@/components/shared/BatchActionsToolbar'
 import { STATUS_LABELS, PRIORITY_LABELS } from '@/lib/types'
-import type { Todo } from '@/lib/types'
+import type { Todo, Priority } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Trash2 } from 'lucide-react'
 
@@ -37,7 +37,7 @@ export function TodoList({ projectId, enableBulkSelect = true }: Props) {
   } = useBulkSelectionStore()
 
   const [createOpen, setCreateOpen] = useState(false)
-  const [form, setForm] = useState({ title: '', description: '', priority: 'medium', deadline: '' })
+  const [form, setForm] = useState<{ title: string; description: string; priority: Priority; deadline: string }>({ title: '', description: '', priority: 'medium', deadline: '' })
   const [visibleTodos, setVisibleTodos] = useState<string[]>([])
   const [deletedTodoBackup, setDeletedTodoBackup] = useState<{ id: string; todo: Todo } | null>(null)
 
@@ -242,7 +242,7 @@ export function TodoList({ projectId, enableBulkSelect = true }: Props) {
             <div className="flex gap-4">
               <div className="flex-1">
                 <label className="mb-1 block text-sm font-medium">Priorität</label>
-                <Select value={form.priority} onValueChange={(v) => setForm({ ...form, priority: v })}>
+                <Select value={form.priority} onValueChange={(v) => setForm({ ...form, priority: v as Priority })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="high">Hoch</SelectItem>

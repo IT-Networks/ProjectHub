@@ -12,6 +12,9 @@ interface FavoriteButtonProps {
   className?: string
 }
 
+// FavoriteButton is icon-only -> map to the square `icon-*` Button sizes.
+const SIZE_MAP = { sm: 'icon-sm', md: 'icon', lg: 'icon-lg' } as const
+
 export function FavoriteButton({
   id,
   type,
@@ -38,7 +41,7 @@ export function FavoriteButton({
   return (
     <Button
       variant={variant}
-      size={size}
+      size={SIZE_MAP[size]}
       onClick={handleToggle}
       className={className}
       aria-label={

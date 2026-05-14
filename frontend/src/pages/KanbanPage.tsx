@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { Priority } from '@/lib/types'
 import { Plus } from 'lucide-react'
 import { KanbanBoard } from '@/components/kanban/KanbanBoard'
 import { useTodoStore } from '@/stores/todoStore'
@@ -24,7 +25,7 @@ export function KanbanPage() {
   const { success, error } = useToast()
   const [createOpen, setCreateOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [form, setForm] = useState({ title: '', description: '', priority: 'medium', project_id: '' as string | null })
+  const [form, setForm] = useState<{ title: string; description: string; priority: Priority; project_id: string | null }>({ title: '', description: '', priority: 'medium', project_id: '' })
   const [validFields, setValidFields] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
@@ -131,7 +132,7 @@ export function KanbanPage() {
               <div className="flex-1">
                 <FormField label="Priorität">
                   <Select value={form.priority} onValueChange={(v) => {
-                    setForm({ ...form, priority: v })
+                    setForm({ ...form, priority: v as Priority })
                     setValidFields({ ...validFields, priority: true })
                   }}>
                     <SelectTrigger><SelectValue /></SelectTrigger>

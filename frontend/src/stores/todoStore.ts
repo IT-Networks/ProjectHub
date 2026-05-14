@@ -2,14 +2,14 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { api } from '@/lib/api'
 import { toast } from '@/stores/toastStore'
-import type { Todo, TodoStatus } from '@/lib/types'
+import type { Todo, TodoStatus, Priority } from '@/lib/types'
 
 interface TodoCreate {
   title: string
   description?: string
   project_id?: string | null
-  status?: string
-  priority?: string
+  status?: TodoStatus
+  priority?: Priority
   deadline?: string | null
   tags?: string[]
 }
