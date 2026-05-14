@@ -1,4 +1,4 @@
-import { Trash2, Copy, Archive, Tag, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 

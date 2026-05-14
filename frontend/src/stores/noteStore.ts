@@ -25,7 +25,7 @@ interface NoteStore {
   removeLinkedKnowledge: (noteId: string, knowledgeId: string) => Promise<void>
 }
 
-export const useNoteStore = create<NoteStore>((set, get) => ({
+export const useNoteStore = create<NoteStore>((set) => ({
   notes: [],
   loading: false,
   error: null,

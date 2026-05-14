@@ -114,7 +114,7 @@ export function NoteList({ projectId }: Props) {
       try {
         await deleteNote(noteId)
         setDeletedNoteBackup(null)
-      } catch (err) {
+      } catch {
         error('Fehler beim Löschen')
         setDeletedNoteBackup(null)
       }
@@ -184,7 +184,7 @@ export function NoteList({ projectId }: Props) {
                       await importNote(projectId, note.id)
                       await fetchNotes(projectId)
                       success('In Wissensdatenbank importiert!')
-                    } catch (err) {
+                    } catch {
                       error('Fehler beim Importieren')
                     }
                   }}>

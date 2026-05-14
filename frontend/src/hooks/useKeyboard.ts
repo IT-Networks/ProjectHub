@@ -1,7 +1,5 @@
 import { useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { useProjectStore } from '@/stores/projectStore'
-import { useTodoStore } from '@/stores/todoStore'
 
 const ROUTES: Record<string, string> = {
   '1': '/',
@@ -13,18 +11,9 @@ const ROUTES: Record<string, string> = {
   '7': '/einstellungen',
 }
 
-interface KeyboardAction {
-  key: string
-  label: string
-  description: string
-  handler: () => void
-}
-
 export function useKeyboardShortcuts() {
   const navigate = useNavigate()
   const location = useLocation()
-  const createProject = useProjectStore((s) => s.createProject)
-  const createTodo = useTodoStore((s) => s.createTodo)
 
   // Get current page context
   const getCurrentPageContext = () => {

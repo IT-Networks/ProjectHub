@@ -30,7 +30,6 @@ export function ProjectListPage() {
   const addRecentItem = useFavoritesStore((s) => s.addRecentItem)
   const navigate = useViewTransitionNavigate()
   const {
-    selectedIds,
     isSelectMode,
     toggleItem,
     selectAll,

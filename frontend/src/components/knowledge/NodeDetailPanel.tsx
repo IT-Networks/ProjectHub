@@ -25,7 +25,6 @@ export function NodeDetailPanel({ projectId, onEdit, onClose }: NodeDetailPanelP
   const selectedItemId = useKnowledgeStore((s) => s.selectedItemId)
   const deleteItem = useKnowledgeStore((s) => s.deleteItem)
   const fetchGraph = useKnowledgeStore((s) => s.fetchGraph)
-  const fetchItems = useKnowledgeStore((s) => s.fetchItems)
   const fetchStats = useKnowledgeStore((s) => s.fetchStats)
   const setSelectedItem = useKnowledgeStore((s) => s.setSelectedItem)
   const fetchItemDetail = useKnowledgeStore((s) => s.fetchItemDetail)

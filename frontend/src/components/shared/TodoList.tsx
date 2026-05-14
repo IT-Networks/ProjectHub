@@ -109,7 +109,7 @@ export function TodoList({ projectId, enableBulkSelect = true }: Props) {
       try {
         await deleteTodo(todoId)
         setDeletedTodoBackup(null)
-      } catch (err) {
+      } catch {
         // Restore on error
         setVisibleTodos((prev) => prev.filter((id) => id !== todoId))
         setDeletedTodoBackup(null)

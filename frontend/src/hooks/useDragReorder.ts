@@ -1,10 +1,5 @@
 import { useState, useCallback } from 'react'
 
-interface DragItem {
-  id: string
-  index: number
-}
-
 interface UseDragReorderReturn {
   draggedId: string | null
   dragOverId: string | null

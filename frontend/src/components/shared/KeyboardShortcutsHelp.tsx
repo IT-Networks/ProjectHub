@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { X } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -74,7 +73,7 @@ export function KeyboardShortcutsHelp() {
   )
 
   const shortcutsByCategory = Object.entries(CATEGORIES).reduce(
-    (acc, [key, label]) => {
+    (acc, [key]) => {
       acc[key as keyof typeof CATEGORIES] = filteredShortcuts.filter(
         (s) => s.category === key
       )

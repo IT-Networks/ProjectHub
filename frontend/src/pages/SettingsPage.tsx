@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/shared/Toast'
@@ -46,7 +45,7 @@ export function SettingsPage() {
       const data = await api.get<AiAssistStatus>('/settings/ai-assist-status')
       setStatus(data)
       success(data.connected ? 'Verbindung erfolgreich!' : 'AI-Assist nicht erreichbar')
-    } catch (err) {
+    } catch {
       setStatus({ connected: false, base_url: 'http://localhost:8000', sse_subscribers: 0 })
       error('Fehler beim Testen der Verbindung')
     }

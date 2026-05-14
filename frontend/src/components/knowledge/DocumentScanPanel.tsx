@@ -39,13 +39,6 @@ const STATUS_ICONS: Record<string, string> = {
   error: '✗',
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  pending: 'Nicht gescannt',
-  scanning: 'Wird gescannt...',
-  done: 'Gescannt',
-  error: 'Fehler',
-}
-
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -98,7 +91,7 @@ export function DocumentScanPanel({ projectId, docsPath }: DocumentScanPanelProp
     setLastResult(null)
     try {
       await api.post(`/knowledge/${projectId}/scan-docs`, { force: false })
-    } catch (e) {
+    } catch {
       setScanning(false)
     }
   }
@@ -108,7 +101,7 @@ export function DocumentScanPanel({ projectId, docsPath }: DocumentScanPanelProp
     setLastResult(null)
     try {
       await api.post(`/knowledge/${projectId}/scan-docs`, { force: true })
-    } catch (e) {
+    } catch {
       setScanning(false)
     }
   }
@@ -117,7 +110,7 @@ export function DocumentScanPanel({ projectId, docsPath }: DocumentScanPanelProp
     setScanning(true)
     try {
       await api.post(`/knowledge/${projectId}/scan-doc/${docId}`)
-    } catch (e) {
+    } catch {
       setScanning(false)
     }
   }

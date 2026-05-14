@@ -90,6 +90,7 @@ export function SuccessAnimation({
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useSuccessAnimation() {
   const [showAnimation, setShowAnimation] = useState(false)
   const [animationType, setAnimationType] = useState<'checkmark' | 'confetti' | 'pulse'>('checkmark')

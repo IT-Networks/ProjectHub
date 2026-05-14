@@ -26,6 +26,7 @@ export interface SlashItem {
   command: (args: { editor: Editor; range: Range }) => void | Promise<void>
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const SLASH_ITEMS: SlashItem[] = [
   {
     id: 'h2',

@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { CATEGORY_LABELS } from '@/lib/types'
-import type { KnowledgeCategory } from '@/lib/types'
 
 interface KnowledgeToolbarProps {
   projectId: string
@@ -20,7 +19,6 @@ export function KnowledgeToolbar({ projectId, onAddClick, onResearchClick }: Kno
   const setFilterCategory = useKnowledgeStore((s) => s.setFilterCategory)
   const searchItems = useKnowledgeStore((s) => s.searchItems)
   const searchQuery = useKnowledgeStore((s) => s.searchQuery)
-  const setSearchQuery = useKnowledgeStore((s) => s.setSearchQuery)
   const clearSearch = useKnowledgeStore((s) => s.clearSearch)
   const stats = useKnowledgeStore((s) => s.stats)
   const fetchItems = useKnowledgeStore((s) => s.fetchItems)

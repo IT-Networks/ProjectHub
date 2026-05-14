@@ -68,7 +68,6 @@ export function InlineAiPopover({ editor }: Props) {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('mousedown', onClick)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection, streaming])
 
   const close = () => {

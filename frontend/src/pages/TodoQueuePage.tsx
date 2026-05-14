@@ -27,7 +27,6 @@ export function TodoQueuePage() {
   const { success, error } = useToast()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
-  const [rejectingId, setRejectingId] = useState<string | null>(null)
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
@@ -188,7 +187,6 @@ export function TodoQueuePage() {
                       size="sm"
                       variant="destructive"
                       onClick={() => {
-                        const itemTitle = item.suggested_title
                         setHiddenIds((prev) => new Set(prev).add(item.id))
 
                         success('Vorschlag abgelehnt', {
@@ -208,7 +206,7 @@ export function TodoQueuePage() {
                         setTimeout(async () => {
                           try {
                             await rejectItem(item.id)
-                          } catch (err) {
+                          } catch {
                             setHiddenIds((prev) => {
                               const next = new Set(prev)
                               next.delete(item.id)

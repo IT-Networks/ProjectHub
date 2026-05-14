@@ -29,7 +29,7 @@ const SEVERITY_COLORS: Record<string, string> = {
   info: 'bg-muted text-muted-foreground',
 }
 
-export function PRReviewPanel({ projectId }: Props) {
+export function PRReviewPanel({ projectId: _projectId }: Props) {
   const isOffline = useIsOffline()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [owner, setOwner] = useState('')
