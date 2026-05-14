@@ -96,7 +96,7 @@ export function useKeyboardShortcuts() {
 
       // Escape to clear focus
       if (e.key === 'Escape' && isFormElement) {
-        e.preventDefault()
+        e.preventDefault();
         (e.target as HTMLElement).blur()
         return
       }

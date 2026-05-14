@@ -85,7 +85,7 @@ export const useFavoritesStore = create<FavoritesState>()(
         })
 
         try {
-          await api.delete(`/favorites/${id}`)
+          await api.del(`/favorites/${id}`)
         } catch (err) {
           console.error('Failed to remove favorite from backend:', err)
         }

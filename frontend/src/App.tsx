@@ -16,7 +16,6 @@ import { useOfflineMonitor, useIsOffline } from '@/hooks/useOffline'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboard'
 import { CommandPalette } from '@/components/layout/CommandPalette'
 import { KeyboardShortcutsHelp } from '@/components/shared/KeyboardShortcutsHelp'
-import { useThemeStore } from '@/stores/themeStore'
 import { SuccessAnimation } from '@/components/shared/SuccessAnimation'
 import { AppToaster } from '@/components/shared/AppToaster'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
@@ -24,7 +23,6 @@ import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 function AppLayout() {
   const fetchProjects = useProjectStore((s) => s.fetchProjects)
   const isOffline = useIsOffline()
-  const theme = useThemeStore((s) => s.theme)
   const [showSuccess, setShowSuccess] = useState(false)
 
   // Initialize SSE, offline monitoring, and keyboard shortcuts
@@ -37,7 +35,7 @@ function AppLayout() {
   }, [fetchProjects])
 
   return (
-    <div className={`${theme} flex h-screen bg-background text-foreground`}>
+    <div className="flex h-screen bg-background text-foreground">
       <CommandPalette />
       <KeyboardShortcutsHelp />
       <Sidebar />

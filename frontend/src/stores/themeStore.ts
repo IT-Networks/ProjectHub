@@ -15,17 +15,31 @@ const getInitialTheme = (): Theme => {
   return 'dark'
 }
 
+/**
+ * Apply the theme to <html> so it covers portaled content (dialogs,
+ * popovers, tooltips) which render outside the React app subtree.
+ */
+const applyTheme = (theme: Theme) => {
+  if (typeof document === 'undefined') return
+  document.documentElement.classList.toggle('dark', theme === 'dark')
+}
+
 export const useThemeStore = create<ThemeStore>((set, get) => ({
   theme: getInitialTheme(),
 
   toggleTheme: () => {
     const next = get().theme === 'dark' ? 'light' : 'dark'
     localStorage.setItem('projecthub-theme', next)
+    applyTheme(next)
     set({ theme: next })
   },
 
   setTheme: (theme) => {
     localStorage.setItem('projecthub-theme', theme)
+    applyTheme(theme)
     set({ theme })
   },
 }))
+
+// Apply once on module load so the initial paint is themed (no FOUC).
+applyTheme(useThemeStore.getState().theme)
