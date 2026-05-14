@@ -14,6 +14,7 @@ from models.todo import Todo
 from models.note import Note
 from models.research import ResearchResult
 from models.knowledge import KnowledgeItem
+from models.synapse import Synapse
 from services.ai_assist_client import ai_assist
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -26,6 +27,20 @@ def _gen_id() -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def _ensure_project(db: AsyncSession, project_id: str) -> Project:
+    """Stellt sicher, dass das Projekt existiert — sonst 404.
+
+    Konsistent mit ``knowledge.py``: Research-Endpoints validierten das
+    Projekt bisher nicht, ``list_research`` für ein gelöschtes Projekt gab
+    still ``[]`` zurück statt 404.
+    """
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Projekt nicht gefunden")
+    return project
 
 
 # --- Schemas ---
@@ -124,25 +139,44 @@ async def _build_project_context(project_id: str, db: AsyncSession) -> str:
                 except Exception:
                     pass
 
-    # Knowledge items (top relevant, pinned first)
-    ki_result = await db.execute(
-        select(KnowledgeItem).where(
-            KnowledgeItem.project_id == project_id,
-        ).order_by(
-            KnowledgeItem.is_pinned.desc(),
-            KnowledgeItem.updated_at.desc(),
-        ).limit(10)
+    # Project knowledge — prefer the synthesised "Synapsen" layer (validated,
+    # higher-order insight nodes with a confidence score). Fall back to the
+    # flat KnowledgeItems only when no synapses have been generated yet.
+    synapse_result = await db.execute(
+        select(Synapse).where(
+            Synapse.project_id == project_id,
+            Synapse.status == "validated",
+            Synapse.verdict.in_(["persist", "persist_flagged"]),
+        ).order_by(Synapse.confidence.desc()).limit(8)
     )
-    knowledge_items = ki_result.scalars().all()
-    if knowledge_items:
-        parts.append("\n## Projektwissen")
-        for ki in knowledge_items:
-            pin = " 📌" if ki.is_pinned else ""
-            tags = json.loads(ki.tags) if ki.tags else []
-            tag_str = f" [{', '.join(tags)}]" if tags else ""
-            parts.append(f"- [{ki.category}]{pin} {ki.title}{tag_str}")
-            if ki.content_plain:
-                parts.append(f"  {ki.content_plain[:300]}")
+    synapses = synapse_result.scalars().all()
+    if synapses:
+        parts.append("\n## Synthetisiertes Projektwissen")
+        for syn in synapses:
+            flag = "" if syn.verdict == "persist" else " (ungeprüft)"
+            parts.append(f"- {syn.title} — Konfidenz {syn.confidence:.0%}{flag}")
+            if syn.summary_plain:
+                parts.append(f"  {syn.summary_plain[:400]}")
+    else:
+        # Fallback: flat knowledge items (top relevant, pinned first)
+        ki_result = await db.execute(
+            select(KnowledgeItem).where(
+                KnowledgeItem.project_id == project_id,
+            ).order_by(
+                KnowledgeItem.is_pinned.desc(),
+                KnowledgeItem.updated_at.desc(),
+            ).limit(10)
+        )
+        knowledge_items = ki_result.scalars().all()
+        if knowledge_items:
+            parts.append("\n## Projektwissen")
+            for ki in knowledge_items:
+                pin = " 📌" if ki.is_pinned else ""
+                tags = json.loads(ki.tags) if ki.tags else []
+                tag_str = f" [{', '.join(tags)}]" if tags else ""
+                parts.append(f"- [{ki.category}]{pin} {ki.title}{tag_str}")
+                if ki.content_plain:
+                    parts.append(f"  {ki.content_plain[:300]}")
 
     return "\n".join(parts)
 
@@ -271,6 +305,8 @@ async def start_research(
     project_id: str, data: ResearchRequest, db: AsyncSession = Depends(get_db)
 ):
     """Start a research query and save results."""
+    await _ensure_project(db, project_id)
+
     if not ai_assist.is_connected:
         await ai_assist.health_check()
     if not ai_assist.is_connected:
@@ -292,9 +328,24 @@ async def start_research(
         raise HTTPException(503, "AI-Assist nicht erreichbar oder lieferte leere Antwort")
 
     response_text = result_data.get("response") or ""
-    if not response_text:
-        raise HTTPException(502, "AI-Assist lieferte leere Antwort")
+    error_msg = result_data.get("error")
     model_used = result_data.get("model", "")
+
+    if not response_text:
+        # agent_call lieferte keinen Text — den echten Fehler durchreichen
+        # statt einer generischen "leere Antwort"-Meldung.
+        detail = error_msg or "AI-Assist lieferte eine leere Antwort"
+        raise HTTPException(502, f"Recherche fehlgeschlagen: {detail}")
+
+    if error_msg:
+        # Teilausgabe + Fehler (z.B. max_iterations oder Tool-Fehler mitten im
+        # Lauf): nicht still als Erfolg speichern — die Warnung im gespeicherten
+        # Ergebnis sichtbar machen, damit der User das Resultat einordnen kann.
+        response_text = (
+            f"> ⚠️ **Hinweis:** Die Recherche wurde nicht sauber abgeschlossen "
+            f"({error_msg}). Das Ergebnis ist möglicherweise unvollständig.\n\n"
+            f"{response_text}"
+        )
 
     # Save to database
     research = ResearchResult(
@@ -320,21 +371,92 @@ async def start_research(
 
 @router.get("/research/{project_id}")
 async def list_research(project_id: str, db: AsyncSession = Depends(get_db)):
-    """List all research results for a project."""
+    """List research results — Metadaten OHNE den vollen ``result``-Text.
+
+    Der ``result`` (LLM-Output, oft mehrere KB) wird bewusst nicht
+    mitgeladen: die Liste zeigt nur Query/Datum/Team. Den Volltext holt das
+    Frontend lazy via ``GET /research/{project_id}/{research_id}``, erst
+    wenn ein Eintrag aufgeklappt wird. Es werden nur die fünf benötigten
+    Spalten selektiert — die große TEXT-Spalte verlässt die DB gar nicht.
+    """
+    await _ensure_project(db, project_id)
+
     result = await db.execute(
-        select(ResearchResult)
+        select(
+            ResearchResult.id,
+            ResearchResult.query,
+            ResearchResult.model_used,
+            ResearchResult.agent_team,
+            ResearchResult.created_at,
+        )
         .where(ResearchResult.project_id == project_id)
         .order_by(ResearchResult.created_at.desc())
     )
-    items = result.scalars().all()
     return [
         {
-            "id": r.id,
-            "query": r.query,
-            "result": r.result,
-            "model_used": r.model_used,
-            "agent_team": r.agent_team,
-            "created_at": r.created_at,
+            "id": r_id,
+            "query": query,
+            "model_used": model_used,
+            "agent_team": agent_team,
+            "created_at": created_at,
         }
-        for r in items
+        for r_id, query, model_used, agent_team, created_at in result.all()
     ]
+
+
+@router.get("/research/{project_id}/{research_id}")
+async def get_research(
+    project_id: str, research_id: str, db: AsyncSession = Depends(get_db)
+):
+    """Single research result inkl. vollem ``result``-Text (Lazy-Load-Ziel).
+
+    Gegenstück zu ``list_research``: liefert genau den ``result``-Text, den
+    die Listen-Antwort aus Performance-Gründen weglässt.
+    """
+    await _ensure_project(db, project_id)
+
+    result = await db.execute(
+        select(ResearchResult).where(
+            ResearchResult.id == research_id,
+            ResearchResult.project_id == project_id,
+        )
+    )
+    research = result.scalar_one_or_none()
+    if not research:
+        raise HTTPException(404, "Recherche nicht gefunden")
+    return {
+        "id": research.id,
+        "query": research.query,
+        "result": research.result,
+        "model_used": research.model_used,
+        "agent_team": research.agent_team,
+        "created_at": research.created_at,
+    }
+
+
+@router.delete("/research/{project_id}/{research_id}")
+async def delete_research(
+    project_id: str, research_id: str, db: AsyncSession = Depends(get_db)
+):
+    """Delete a single research result.
+
+    Pro-Eintrag-Löschen — bisher konnte man Recherchen nur über das
+    Löschen des gesamten Projekts (FK ``ondelete=CASCADE``) entfernen.
+    Ein bereits nach Knowledge importierter Eintrag bleibt unberührt:
+    der ``KnowledgeItem`` ist eine eigenständige Kopie des Inhalts.
+    """
+    await _ensure_project(db, project_id)
+
+    result = await db.execute(
+        select(ResearchResult).where(
+            ResearchResult.id == research_id,
+            ResearchResult.project_id == project_id,
+        )
+    )
+    research = result.scalar_one_or_none()
+    if not research:
+        raise HTTPException(404, "Recherche nicht gefunden")
+
+    await db.delete(research)
+    await db.commit()
+    return {"success": True}

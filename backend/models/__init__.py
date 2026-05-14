@@ -7,6 +7,10 @@ from models.research import ResearchResult
 from models.cache import OfflineCache
 from models.knowledge import KnowledgeItem, KnowledgeEdge, ProjectDocument
 from models.source_change import SourceChange, SyncRun
+from models.synapse import (
+    KnowledgeEntity, KnowledgeEntityMention, KnowledgeEntityRelation,
+    Synapse, SynapseClaim, SynapseGenerationRun, KnowledgeReviewQueue,
+)
 
 __all__ = [
     "Project", "DataSourceLink",
@@ -18,4 +22,6 @@ __all__ = [
     "OfflineCache",
     "KnowledgeItem", "KnowledgeEdge", "ProjectDocument",
     "SourceChange", "SyncRun",
+    "KnowledgeEntity", "KnowledgeEntityMention", "KnowledgeEntityRelation",
+    "Synapse", "SynapseClaim", "SynapseGenerationRun", "KnowledgeReviewQueue",
 ]

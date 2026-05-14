@@ -1,9 +1,12 @@
 import hashlib
+import html
 import json
 import re
 import secrets
 import logging
 from datetime import datetime, timezone
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, func, text, or_
@@ -30,11 +33,28 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _strip_html(html: str) -> str:
+def _strip_html(html_text: str) -> str:
     """Strip HTML tags for plain text / FTS indexing."""
-    text_content = re.sub(r"<[^>]+>", " ", html)
+    text_content = re.sub(r"<[^>]+>", " ", html_text)
     text_content = re.sub(r"\s+", " ", text_content).strip()
     return text_content
+
+
+def _markdown_to_html(md_text: str) -> str:
+    """Convert synthesized Markdown to HTML for the rich-text ``content`` field.
+
+    ``NodeDetailPanel`` renders ``content`` via ``dangerouslySetInnerHTML``,
+    so it must be HTML — raw Markdown would show literal ``##``/``-`` markers.
+    Falls back to an escaped ``<pre>`` block if the markdown lib is missing,
+    so a rendering hiccup never sinks the whole research.
+    """
+    if not md_text:
+        return ""
+    try:
+        import markdown as _md
+        return _md.markdown(md_text, extensions=["tables", "fenced_code", "sane_lists"])
+    except Exception:
+        return f"<pre>{html.escape(md_text)}</pre>"
 
 
 VALID_CATEGORIES = {
@@ -189,6 +209,54 @@ async def _ensure_project(db: AsyncSession, project_id: str):
     result = await db.execute(select(Project).where(Project.id == project_id))
     if not result.scalar_one_or_none():
         raise HTTPException(404, "Projekt nicht gefunden")
+
+
+# --- Aggregierte Imports (projekt-übergreifend) ---
+#
+# WICHTIG: Diese literale Route MUSS vor den ``/{project_id}``- und
+# ``/{project_id}/{item_id}``-Routen stehen. FastAPI matcht in
+# Deklarations-Reihenfolge — sonst würde ``/imports/messages`` als
+# ``project_id="imports", item_id="messages"`` fehlinterpretiert.
+
+@router.get("/imports/messages")
+async def list_all_imported_messages(
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Alle als Wissen extrahierten Nachrichten ÜBER ALLE PROJEKTE — eine Query.
+
+    Ersetzt das frühere Frontend-Fan-out (ein Request pro Projekt → O(Projekte)
+    HTTP-Calls bei jedem Inbox-Aufruf). Die Inbox braucht nur die
+    ``source:external_id``-Keys für das „✓ Wissen"-Badge; ``project_id`` wird
+    für Konsumenten mitgeliefert, die eine Zuordnung brauchen.
+
+    Es werden nur die vier benötigten Spalten selektiert — keine vollen
+    ``KnowledgeItem``-Objekte (deren ``content`` kann groß sein).
+    """
+    result = await db.execute(
+        select(
+            KnowledgeItem.id,
+            KnowledgeItem.project_id,
+            KnowledgeItem.extra_data,
+            KnowledgeItem.source_ref,
+        ).where(
+            KnowledgeItem.source_type.in_(["email_extract", "chat_extract"]),
+        )
+    )
+    out: list[dict] = []
+    for item_id, project_id, extra_data, source_ref in result.all():
+        try:
+            meta = json.loads(extra_data) if extra_data else {}
+        except (ValueError, TypeError):
+            # Eine kaputte ``extra_data``-Zeile darf nicht die ganze Liste kippen.
+            meta = {}
+        out.append({
+            "item_id": item_id,
+            "project_id": project_id,
+            "source": meta.get("source", ""),
+            "external_id": meta.get("external_id"),
+            "source_ref": source_ref,
+        })
+    return out
 
 
 # --- Knowledge Item CRUD ---
@@ -842,14 +910,30 @@ async def scan_single_doc(
 class ResearchToKnowledgeRequest(BaseModel):
     topic: str
     team: str | None = None
+    # Confluence Deep-Research: wenn page_url ODER space gesetzt ist, läuft
+    # die Recherche über die Confluence-Pipeline (Seitenbaum + PDF-Attachments)
+    # statt über den generischen Agent-Call.
+    confluence_page_url: str | None = None
+    confluence_space: str | None = None
+    include_children: bool = False
 
 
 @router.post("/{project_id}/research")
 async def research_to_knowledge(
     project_id: str, data: ResearchToKnowledgeRequest, db: AsyncSession = Depends(get_db)
 ) -> KnowledgeItemResponse:
-    """Research a topic via AI-Assist and save result as Knowledge Item."""
+    """Research a topic via AI-Assist and save result as Knowledge Item.
+
+    Two modes:
+      * Confluence Deep-Research — when ``confluence_page_url`` or
+        ``confluence_space`` is set: discovery + PDF-attachment analysis
+        + synthesis via AI-Assist's ``/api/research/confluence``.
+      * Generic agent research — otherwise: a single agent call.
+    """
     await _ensure_project(db, project_id)
+
+    if data.confluence_page_url or data.confluence_space:
+        return await _research_confluence_to_knowledge(project_id, data, db)
 
     topic_norm = (data.topic or "").strip().lower()
     ref_basis = f"{project_id}|ai-research|{topic_norm}"
@@ -950,6 +1034,143 @@ async def research_to_knowledge(
     await _fts_insert(db, item)
 
     # Auto-link to items with overlapping tags
+    await _auto_link_by_tags(db, project_id, item)
+
+    return _item_to_response(item)
+
+
+def _confluence_ref_hash(project_id: str, data: "ResearchToKnowledgeRequest") -> str:
+    """Stable dedup key for a Confluence research (topic + target)."""
+    ref_basis = (
+        f"{project_id}|confluence|{data.confluence_page_url or ''}"
+        f"|{data.confluence_space or ''}|{(data.topic or '').strip().lower()}"
+    )
+    return hashlib.sha256(ref_basis.encode("utf-8")).hexdigest()
+
+
+async def _research_confluence_to_knowledge(
+    project_id: str, data: ResearchToKnowledgeRequest, db: AsyncSession
+) -> KnowledgeItemResponse:
+    """Confluence Deep-Research via AI-Assist → ein synthetisiertes Knowledge Item.
+
+    Anders als der generische Pfad läuft hier die volle Confluence-Pipeline
+    (Seitenbaum-Discovery + PDF-Attachment-Analyse + Synthese). Das Ergebnis
+    ist ein Markdown-Dokument; die einzelnen Findings stecken darin und in
+    ``extra_data``. Kein 5000-Zeichen-Cap mehr — ``content`` ist Text.
+    """
+    topic = (data.topic or "").strip()
+    if not topic:
+        raise HTTPException(400, "topic ist erforderlich")
+
+    source_ref_hash = _confluence_ref_hash(project_id, data)
+
+    async def _find_existing() -> KnowledgeItem | None:
+        res = await db.execute(
+            select(KnowledgeItem).where(
+                KnowledgeItem.project_id == project_id,
+                KnowledgeItem.source_type == "confluence",
+                KnowledgeItem.source_ref == source_ref_hash,
+            )
+        )
+        return res.scalar_one_or_none()
+
+    pre_existing = await _find_existing()
+    if pre_existing:
+        return _item_to_response(pre_existing)
+
+    # AI-Assist Confluence-Pipeline aufrufen
+    try:
+        result = await ai_assist.research_confluence(
+            topic,
+            url=data.confluence_page_url or None,
+            space_key=data.confluence_space or None,
+            include_children=data.include_children,
+        )
+    except ConnectionError:
+        raise HTTPException(503, "AI-Assist nicht erreichbar")
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code
+        try:
+            detail = e.response.json().get("detail", e.response.text[:300])
+        except (ValueError, AttributeError):
+            detail = e.response.text[:300]
+        if status in (422, 502, 504):
+            # Auflösungs-/Confluence-/Timeout-Fehler 1:1 durchreichen.
+            raise HTTPException(status, detail)
+        raise HTTPException(502, f"AI-Assist Confluence-Research fehlgeschlagen: {detail}")
+
+    result = result or {}
+    markdown = result.get("markdown") or ""
+    summary = result.get("summary") or ""
+    if not markdown and not summary:
+        raise HTTPException(502, "Leere Antwort von AI-Assist Confluence-Research")
+
+    findings = result.get("findings") or []
+    pages_analyzed = result.get("pages_analyzed", 0)
+    pdfs_analyzed = result.get("pdfs_analyzed", 0)
+
+    # Race-Re-Check — der Pipeline-Call kann Minuten dauern.
+    race_existing = await _find_existing()
+    if race_existing:
+        logger.info("Confluence research duplicate detected after call, returning existing item")
+        return _item_to_response(race_existing)
+
+    # Tags: Finding-Kategorien + Topic-Keywords.
+    finding_categories = sorted({
+        f.get("category", "") for f in findings if f.get("category")
+    })
+    keyword_tags = _extract_tags_from_text(topic + " " + summary[:500])
+    tags = list(dict.fromkeys(finding_categories + keyword_tags))[:8]
+
+    # Konfidenz: Mehrheit der Findings (sonst medium).
+    confidences = [f.get("confidence", "medium") for f in findings]
+    if confidences:
+        high_ratio = confidences.count("high") / len(confidences)
+        confidence = "high" if high_ratio > 0.5 else (
+            "medium" if confidences.count("high") else "low"
+        )
+    else:
+        confidence = "medium"
+
+    # Synthese ist Markdown → für das rich-text content-Feld nach HTML wandeln
+    # (NodeDetailPanel rendert via dangerouslySetInnerHTML).
+    content_html = _markdown_to_html(markdown) if markdown else f"<p>{html.escape(summary)}</p>"
+    content_plain = _strip_html(content_html)
+    item = KnowledgeItem(
+        id=_gen_id(),
+        project_id=project_id,
+        title=f"Confluence-Recherche: {topic[:80]}",
+        content=content_html,
+        content_plain=content_plain[:20000],
+        category="reference",
+        source_type="confluence",
+        source_ref=source_ref_hash,
+        tags=json.dumps(tags),
+        confidence=confidence,
+        extra_data=json.dumps({
+            "topic": topic,
+            "team": data.team,
+            "confluence_page_url": data.confluence_page_url,
+            "confluence_space": data.confluence_space,
+            "include_children": data.include_children,
+            "summary": summary[:2000],
+            "findings_count": len(findings),
+            "pages_analyzed": pages_analyzed,
+            "pdfs_analyzed": pdfs_analyzed,
+            "errors": (result.get("errors") or [])[:20],
+        }),
+    )
+    try:
+        db.add(item)
+        await db.commit()
+        await db.refresh(item)
+    except IntegrityError:
+        await db.rollback()
+        existing = await _find_existing()
+        if existing:
+            return _item_to_response(existing)
+        raise
+    await _fts_insert(db, item)
     await _auto_link_by_tags(db, project_id, item)
 
     return _item_to_response(item)

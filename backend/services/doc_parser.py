@@ -1,11 +1,18 @@
 """
-Word document parser — extracts headings, text, and tables from .docx files.
+Document parser — extracts headings, text, and tables from .docx files,
+and page-by-page text from .pdf files. Both produce ``DocSection`` lists
+so the shared ``doc_chunker`` can process either source unchanged.
 """
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 
 logger = logging.getLogger("projecthub.doc_parser")
+
+# Per-page text cap for PDFs — keeps a single huge page from blowing the
+# LLM context once chunked. ~2K tokens of prose.
+_PDF_PER_PAGE_CHAR_CAP = 8000
 
 
 @dataclass
@@ -129,4 +136,65 @@ def parse_docx(file_path: str) -> list[DocSection]:
     _flush_section()
 
     logger.info("Parsed %s: %d sections", file_path, len(sections))
+    return sections
+
+
+def parse_pdf(file_path: str) -> list[DocSection]:
+    """Parse a .pdf file into one ``DocSection`` per (non-empty) page.
+
+    PDFs have no reliable heading structure, so each page becomes its own
+    section ("Seite N"). The downstream ``chunk_sections`` then merges
+    small pages and splits large ones — identical handling to .docx.
+
+    Scanned PDFs (no extractable text layer) yield zero sections; the
+    caller treats that as a parse with no content rather than an error.
+    """
+    try:
+        from pypdf import PdfReader
+        from pypdf.errors import PdfReadError
+    except ImportError as e:
+        logger.error("pypdf not installed — cannot parse PDF %s: %s", file_path, e)
+        return []
+
+    try:
+        reader = PdfReader(file_path)
+    except PdfReadError as e:
+        logger.error("Corrupt/unsupported PDF %s: %s", file_path, e)
+        return []
+    except Exception as e:
+        logger.error("Failed to open PDF %s: %s", file_path, e)
+        return []
+
+    if reader.is_encrypted:
+        # pypdf can often decrypt with an empty password.
+        try:
+            if not reader.decrypt(""):
+                logger.warning("PDF %s is encrypted — skipping", file_path)
+                return []
+        except Exception:
+            logger.warning("PDF %s is encrypted — skipping", file_path)
+            return []
+
+    doc_name = os.path.basename(file_path)
+    sections: list[DocSection] = []
+    for idx, page in enumerate(reader.pages, start=1):
+        try:
+            text = (page.extract_text() or "").strip()
+        except Exception as e:
+            logger.warning("Page %d extract failed in %s: %s", idx, doc_name, e)
+            continue
+        if not text:
+            continue  # empty / scanned page — no signal
+        if len(text) > _PDF_PER_PAGE_CHAR_CAP:
+            text = text[:_PDF_PER_PAGE_CHAR_CAP]
+        heading = f"Seite {idx}"
+        sections.append(DocSection(
+            heading=heading,
+            heading_level=1,
+            heading_path=f"{doc_name} > {heading}",
+            text=text,
+        ))
+
+    logger.info("Parsed PDF %s: %d sections from %d pages",
+                file_path, len(sections), len(reader.pages))
     return sections

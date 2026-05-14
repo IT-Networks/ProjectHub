@@ -96,7 +96,8 @@ export function KnowledgeToolbar({ projectId, onAddClick, onResearchClick }: Kno
           { mode: 'graph' as const, label: '◉' , title: 'Graph' },
           { mode: 'list' as const, label: '☰', title: 'Liste' },
           { mode: 'split' as const, label: '◫', title: 'Split' },
-        ]).map(({ mode, label, title }) => (
+          { mode: 'synapses' as const, label: '✦', title: 'Synapsen' },
+        ]).map(({ mode, label, title }, i, arr) => (
           <button
             key={mode}
             onClick={() => setViewMode(mode)}
@@ -105,7 +106,7 @@ export function KnowledgeToolbar({ projectId, onAddClick, onResearchClick }: Kno
               viewMode === mode
                 ? 'bg-primary text-primary-foreground'
                 : 'text-muted-foreground hover:bg-muted'
-            } ${mode === 'graph' ? 'rounded-l-md' : mode === 'split' ? 'rounded-r-md' : ''}`}
+            } ${i === 0 ? 'rounded-l-md' : i === arr.length - 1 ? 'rounded-r-md' : ''}`}
           >
             {label}
           </button>

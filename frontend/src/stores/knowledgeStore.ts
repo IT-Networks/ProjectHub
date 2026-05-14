@@ -14,7 +14,14 @@ import type {
   SuggestedEdge,
 } from '@/lib/types'
 
-type ViewMode = 'graph' | 'list' | 'split'
+type ViewMode = 'graph' | 'list' | 'split' | 'synapses'
+
+/** Optionales Confluence-Ziel für researchTopic — leer = generische Recherche. */
+export interface ResearchOptions {
+  confluencePageUrl?: string
+  confluenceSpace?: string
+  includeChildren?: boolean
+}
 
 interface KnowledgeStore {
   items: KnowledgeItem[]
@@ -42,7 +49,7 @@ interface KnowledgeStore {
   createEdge: (projectId: string, data: EdgeCreate) => Promise<KnowledgeEdge>
   deleteEdge: (projectId: string, edgeId: string) => Promise<void>
   searchItems: (projectId: string, query: string) => Promise<void>
-  researchTopic: (projectId: string, topic: string) => Promise<KnowledgeItem>
+  researchTopic: (projectId: string, topic: string, opts?: ResearchOptions) => Promise<KnowledgeItem>
   suggestLinks: (projectId: string, itemId: string) => Promise<SuggestedEdge[]>
   importNote: (projectId: string, noteId: string) => Promise<KnowledgeItem>
   importResearch: (projectId: string, researchId: string) => Promise<KnowledgeItem>
@@ -179,8 +186,14 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => ({
     }
   },
 
-  researchTopic: async (projectId, topic) => {
-    const item = await api.post<KnowledgeItem>(`/knowledge/${projectId}/research`, { topic })
+  researchTopic: async (projectId, topic, opts) => {
+    const body: Record<string, unknown> = { topic }
+    // Wenn ein Confluence-Ziel angegeben ist, läuft die Recherche serverseitig
+    // über die Confluence-Deep-Research-Pipeline statt den generischen Agenten.
+    if (opts?.confluencePageUrl) body.confluence_page_url = opts.confluencePageUrl
+    if (opts?.confluenceSpace) body.confluence_space = opts.confluenceSpace
+    if (opts?.includeChildren) body.include_children = opts.includeChildren
+    const item = await api.post<KnowledgeItem>(`/knowledge/${projectId}/research`, body)
     set((s) => ({ items: [item, ...s.items] }))
     return item
   },

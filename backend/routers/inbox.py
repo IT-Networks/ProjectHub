@@ -65,6 +65,27 @@ def _to_response(m: LinkedMessage) -> LinkedMessageResponse:
 
 # --- Email Proxy ---
 
+def _normalize_email(raw: dict) -> dict:
+    """Übersetzt die AI-Assist-E-Mail-Form in die ProjectHub-Frontend-Form.
+
+    AI-Assist liefert ``email_id`` / ``preview``; das Frontend (Store +
+    InboxPage) erwartet ``id`` / ``body_preview``. Diese Übersetzung passiert
+    zentral hier, damit der Feldname-Mismatch nicht über drei Schichten
+    durchschlägt (er war die Ursache für React-Key-Kollisionen und die leere
+    Detail-Ansicht).
+    """
+    return {
+        "id": raw.get("email_id") or raw.get("id") or "",
+        "subject": raw.get("subject") or "",
+        "sender": raw.get("sender") or "",
+        "sender_name": raw.get("sender_name") or "",
+        "date": raw.get("date") or "",
+        "body_preview": raw.get("preview") or raw.get("body_preview") or "",
+        "has_attachments": bool(raw.get("has_attachments")),
+        "folder": raw.get("folder") or "",
+    }
+
+
 @router.get("/emails")
 async def search_emails(
     query: str = Query(""),
@@ -73,7 +94,7 @@ async def search_emails(
     folder: str = Query("inbox"),
     limit: int = Query(20),
 ):
-    """Proxy to AI-Assist email search."""
+    """Proxy to AI-Assist email search (mit Feld-Normalisierung)."""
     data = await ai_assist.post("/api/email/search", {
         "query": query,
         "sender": sender,
@@ -83,16 +104,42 @@ async def search_emails(
     })
     if data is None:
         return {"success": False, "results": [], "total": 0, "error": "AI-Assist nicht erreichbar"}
-    return data
+
+    raw_results = data.get("results") or []
+    results = [_normalize_email(r) for r in raw_results]
+    return {
+        "success": data.get("success", True),
+        "results": results,
+        "total": data.get("total", len(results)),
+        "error": data.get("error"),
+    }
 
 
 @router.get("/emails/{email_id}")
 async def read_email(email_id: str, folder: str = Query("inbox")):
-    """Proxy to AI-Assist email read."""
+    """Proxy to AI-Assist email read (mit Feld-Normalisierung)."""
     data = await ai_assist.get(f"/api/email/read/{email_id}", params={"folder": folder})
     if data is None:
         raise HTTPException(503, "AI-Assist nicht erreichbar")
-    return data
+
+    email = data.get("email") or {}
+    return {
+        "success": data.get("success", True),
+        "error": data.get("error"),
+        "email": {
+            "id": email.get("email_id") or email.get("id") or email_id,
+            "subject": email.get("subject") or "",
+            "sender": email.get("sender") or "",
+            "sender_name": email.get("sender_name") or "",
+            "to": email.get("to") or [],
+            "cc": email.get("cc") or [],
+            "date": email.get("date") or "",
+            "body_text": email.get("body_text") or "",
+            "body_html": email.get("body_html") or "",
+            "attachments": email.get("attachments") or [],
+            "folder": email.get("folder") or folder,
+        },
+    }
 
 
 # --- Webex Proxy ---

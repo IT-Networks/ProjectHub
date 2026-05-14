@@ -387,6 +387,73 @@ class AiAssistClient:
         """
         return await self.get(V2_AGENT_HISTORY.format(session_id=session_id))
 
+    # ── Confluence Deep-Research ────────────────────────────────────────────
+
+    async def research_confluence(
+        self,
+        topic: str,
+        *,
+        page_id: str | None = None,
+        url: str | None = None,
+        space_key: str | None = None,
+        include_children: bool = True,
+    ) -> dict:
+        """POST /api/research/confluence — gründliche Confluence-Recherche.
+
+        Discovery (Seitenbaum) → Planning → Execution (Fan-out: Body +
+        PDF-Attachments → Chunks → LLM-Extraktion) → Synthesis. Das kann
+        Minuten dauern, daher der lange LLM-Timeout statt der 30s-Default.
+
+        Returns the parsed response dict ``{topic, summary, markdown,
+        findings, pages_analyzed, pdfs_analyzed, providers, errors}``.
+
+        Raises:
+            ConnectionError: AI-Assist nicht erreichbar (transport-level).
+            httpx.HTTPStatusError: AI-Assist antwortete mit 4xx/5xx — der
+                Caller mappt den Status (422/502/504) auf seine eigene
+                HTTPException.
+        """
+        body: dict[str, Any] = {
+            "topic": topic,
+            "include_children": include_children,
+        }
+        if page_id:
+            body["page_id"] = page_id
+        if url:
+            body["url"] = url
+        if space_key:
+            body["space_key"] = space_key
+
+        # Dedicated client — a deep-research run far outlasts the default
+        # read timeout used by the generic ``post`` helper.
+        client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=httpx.Timeout(
+                connect=5.0,
+                read=float(settings.ai_assist_llm_timeout),
+                write=10.0,
+                pool=5.0,
+            ),
+        )
+        try:
+            resp = await client.post("/api/research/confluence", json=body)
+            resp.raise_for_status()
+            self.is_connected = True
+            return resp.json()
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.ConnectTimeout) as e:
+            self.is_connected = False
+            logger.warning("AI-Assist Confluence-Research nicht erreichbar: %s", e)
+            raise ConnectionError(str(e)) from e
+        except httpx.HTTPStatusError as e:
+            self.is_connected = True  # server up, just rejected the request
+            logger.warning(
+                "AI-Assist Confluence-Research HTTP %s: %s",
+                e.response.status_code, e.response.text[:200],
+            )
+            raise
+        finally:
+            await client.aclose()
+
     # ── Health ──────────────────────────────────────────────────────────────
 
     async def health_check(self) -> bool:

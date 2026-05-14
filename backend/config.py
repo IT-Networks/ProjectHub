@@ -15,6 +15,21 @@ class Settings(BaseSettings):
     polling_interval_minutes: int = 5
     polling_enabled: bool = True
 
+    # Document scan — wie viele Chunks parallel per LLM extrahiert werden.
+    # Höher = schneller, aber mehr gleichzeitige Last auf AI-Assist/LLM.
+    doc_scan_concurrency: int = 4
+
+    # Synapsen — Wissens-Synthese & Validierung.
+    # verifier_models: Modellnamen für den Critic-Fan-out. MIT >=2 Einträgen
+    # entsteht echte Antwort-Diversität (heterogene Modelle gegen "agreement
+    # collapse"); leer oder 1 Eintrag → ein einzelner Critic-Call (kein
+    # Fan-out, da identische Calls keine Diversität bringen).
+    synapse_verifier_models: list[str] = []
+    synapse_verifier_samples: int = 3        # max Critic-Samples pro Claim
+    synapse_max_llm_concurrency: int = 6     # gleichzeitige LLM-Calls in der Validierung
+    synapse_confidence_high: float = 0.85    # >= → Band "high", Verdikt "persist"
+    synapse_confidence_review: float = 0.5   # < → Band "low", Verdikt "human_review"
+
     # Server
     host: str = "0.0.0.0"
     port: int = 5001

@@ -416,3 +416,132 @@ export const CONFIDENCE_LABELS: Record<Confidence, string> = {
   medium: 'Mittel',
   low: 'Niedrig',
 }
+
+// === Synapsen — Wissens-Synthese & Validierung ===
+
+export type SynapseStatus = 'pending_validation' | 'validated' | 'rejected' | 'stale'
+export type SynapseVerdict = 'persist' | 'persist_flagged' | 'human_review'
+export type ConfidenceBand = 'high' | 'medium' | 'low'
+export type ClaimRelation = 'supported' | 'contradicted' | 'unsupported' | 'partial'
+export type RunStatus = 'running' | 'ok' | 'partial' | 'error'
+export type RunPhase =
+  | 'extracting_entities'
+  | 'detecting_communities'
+  | 'synthesising'
+  | 'validating'
+  | 'done'
+
+export interface SynapseRun {
+  id: string
+  project_id: string
+  trigger: string
+  status: RunStatus
+  phase: RunPhase
+  item_count: number
+  entity_count: number
+  synapse_count: number
+  validated_count: number
+  flagged_count: number
+  review_count: number
+  token_usage: Record<string, number>
+  error_summary: string | null
+  started_at: string
+  finished_at: string | null
+}
+
+export interface Synapse {
+  id: string
+  project_id: string
+  title: string
+  summary: string
+  summary_plain: string
+  community_level: number
+  confidence: number
+  confidence_band: ConfidenceBand
+  verdict: SynapseVerdict
+  status: SynapseStatus
+  source_item_ids: string[]
+  source_entity_ids: string[]
+  claim_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface SynapseClaim {
+  id: string
+  claim_text: string
+  relation: ClaimRelation
+  evidence: { item_id: string; span: string; nli_score?: number }[]
+  nli_score: number | null
+  verifier_agreement: number
+  verifier_votes: Record<string, number>
+}
+
+export interface SynapseDetail extends Synapse {
+  claims: SynapseClaim[]
+  defects: string[]
+}
+
+export interface ReviewQueueItem {
+  id: string
+  synapse_id: string
+  synapse_title: string
+  reason: string
+  confidence: number
+  human_verdict: 'accepted' | 'rejected' | 'edited' | null
+  created_at: string
+  resolved_at: string | null
+}
+
+export interface SynapseGenerateResponse {
+  run_id: string | null
+  started: boolean
+  reason: 'started' | 'already_running' | 'project_not_found'
+}
+
+export type HumanVerdict = 'accepted' | 'rejected' | 'edited'
+
+export interface AskSource {
+  synapse_id: string
+  title: string
+  confidence: number
+}
+
+export interface AskResponse {
+  answer: string
+  sources: AskSource[]
+}
+
+export const CONFIDENCE_BAND_LABELS: Record<ConfidenceBand, string> = {
+  high: 'Hohe Konfidenz',
+  medium: 'Mittlere Konfidenz',
+  low: 'Niedrige Konfidenz',
+}
+
+export const VERDICT_LABELS: Record<SynapseVerdict, string> = {
+  persist: 'Validiert',
+  persist_flagged: 'Ungeprüft',
+  human_review: 'Review nötig',
+}
+
+export const RELATION_LABELS: Record<ClaimRelation, string> = {
+  supported: 'Belegt',
+  partial: 'Teilweise belegt',
+  unsupported: 'Unbelegt',
+  contradicted: 'Widersprochen',
+}
+
+export const RELATION_COLORS: Record<ClaimRelation, string> = {
+  supported: '#10b981',
+  partial: '#f59e0b',
+  unsupported: '#6b7280',
+  contradicted: '#ef4444',
+}
+
+export const RUN_PHASE_LABELS: Record<RunPhase, string> = {
+  extracting_entities: 'Entitäten extrahieren',
+  detecting_communities: 'Cluster erkennen',
+  synthesising: 'Synthetisieren',
+  validating: 'Validieren',
+  done: 'Fertig',
+}

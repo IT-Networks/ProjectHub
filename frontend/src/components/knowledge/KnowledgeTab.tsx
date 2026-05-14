@@ -5,6 +5,7 @@ import { KnowledgeToolbar } from './KnowledgeToolbar'
 import { KnowledgeGraphView } from './KnowledgeGraphView'
 import { KnowledgeListView } from './KnowledgeListView'
 import { KnowledgeSplitView } from './KnowledgeSplitView'
+import { SynapseView } from './SynapseView'
 import { KnowledgeItemDialog } from './KnowledgeItemDialog'
 import { NodeDetailPanel } from './NodeDetailPanel'
 import { DocumentScanPanel } from './DocumentScanPanel'
@@ -64,10 +65,11 @@ export function KnowledgeTab({ projectId }: KnowledgeTabProps) {
           )}
           {viewMode === 'list' && <KnowledgeListView projectId={projectId} onAdd={handleAdd} />}
           {viewMode === 'split' && <KnowledgeSplitView projectId={projectId} />}
+          {viewMode === 'synapses' && <SynapseView projectId={projectId} />}
         </div>
 
-        {/* Detail panel when item selected */}
-        {selectedItemId && (
+        {/* Detail panel when item selected — not relevant in synapse view */}
+        {selectedItemId && viewMode !== 'synapses' && (
           <NodeDetailPanel
             projectId={projectId}
             onEdit={handleEdit}

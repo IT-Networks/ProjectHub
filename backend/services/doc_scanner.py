@@ -1,6 +1,7 @@
 """
 Document scanner — orchestrates parsing, chunking, and LLM-based knowledge extraction.
 """
+import asyncio
 import hashlib
 import json
 import logging
@@ -13,16 +14,25 @@ from datetime import datetime, timezone
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from models.knowledge import KnowledgeItem, KnowledgeEdge, ProjectDocument
 from models.project import Project
 from services.ai_assist_client import ai_assist
-from services.doc_parser import parse_docx
+from services.doc_parser import parse_docx, parse_pdf
 from services.doc_chunker import chunk_sections, DocChunk
 from services.sse_hub import sse_hub
 
 logger = logging.getLogger("projecthub.doc_scanner")
 
-SUPPORTED_EXTENSIONS = {".docx"}
+SUPPORTED_EXTENSIONS = {".docx", ".pdf"}
+
+
+def _parse_document(file_path: str) -> list:
+    """Dispatch to the right parser based on file extension."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".pdf":
+        return parse_pdf(file_path)
+    return parse_docx(file_path)
 
 LLM_EXTRACTION_PROMPT = """Du bist ein Wissensextraktor. Analysiere den folgenden Abschnitt aus einer Projektspezifikation und extrahiere das Kernwissen.
 
@@ -170,9 +180,9 @@ async def scan_project_documents(
             "total": total_docs,
         })
 
-        # Phase 2: Parse
+        # Phase 2: Parse (.docx or .pdf)
         try:
-            sections = parse_docx(file_path)
+            sections = _parse_document(file_path)
         except Exception as e:
             logger.error("Parse error for %s: %s", file_name, e)
             doc_record.scan_status = "error"
@@ -209,26 +219,47 @@ async def scan_project_documents(
             "current": 0,
         })
 
-        # Phase 4: Extract via LLM
-        items_created = 0
-        created_item_ids: list[str] = []
+        # Phase 4: Extract via LLM — bounded parallel fan-out.
+        # The LLM call per chunk is the slow part; run them concurrently
+        # under a semaphore. DB writes stay on this coroutine afterwards,
+        # in document order, so the based_on edge chain (Phase 5) is
+        # deterministic regardless of completion order.
+        sem = asyncio.Semaphore(max(1, settings.doc_scan_concurrency))
+        progress_lock = asyncio.Lock()
+        completed = 0
 
-        for chunk_idx, chunk in enumerate(chunks):
+        async def _extract_one(idx: int, chunk: DocChunk):
+            nonlocal completed
+            async with sem:
+                extracted = await _extract_knowledge_from_chunk(chunk, file_name)
+            if not extracted:
+                # Fallback: use chunk as-is without LLM
+                extracted = _fallback_extraction(chunk, file_name)
+            async with progress_lock:
+                completed += 1
+                done = completed
             await sse_hub.emit("doc_scan_progress", {
                 "project_id": project_id,
                 "document_id": doc_record.id,
                 "file_name": file_name,
                 "phase": "extracting",
-                "current": chunk_idx + 1,
+                "current": done,
                 "total_chunks": len(chunks),
                 "current_section": chunk.heading_path,
             })
+            return idx, chunk, extracted
 
-            extracted = await _extract_knowledge_from_chunk(chunk, file_name)
-            if not extracted:
-                # Fallback: use chunk as-is without LLM
-                extracted = _fallback_extraction(chunk, file_name)
+        # asyncio.gather preserves input order; the explicit sort is a
+        # defensive guard so a future refactor can't silently scramble
+        # the based_on chain.
+        extraction_results = await asyncio.gather(
+            *(_extract_one(i, c) for i, c in enumerate(chunks))
+        )
+        extraction_results = sorted(extraction_results, key=lambda r: r[0])
 
+        items_created = 0
+        created_item_ids: list[str] = []
+        for _idx, chunk, extracted in extraction_results:
             # Create KnowledgeItem
             item = KnowledgeItem(
                 id=_gen_id(),
