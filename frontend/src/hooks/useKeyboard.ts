@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 
 const ROUTES: Record<string, string> = {
@@ -16,7 +16,7 @@ export function useKeyboardShortcuts() {
   const location = useLocation()
 
   // Get current page context
-  const getCurrentPageContext = () => {
+  const getCurrentPageContext = useCallback(() => {
     const path = location.pathname
     if (path === '/') return 'dashboard'
     if (path === '/projekte') return 'projects'
@@ -27,7 +27,7 @@ export function useKeyboardShortcuts() {
     if (path === '/queue') return 'queue'
     if (path === '/einstellungen') return 'settings'
     return 'unknown'
-  }
+  }, [location])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -93,7 +93,7 @@ export function useKeyboardShortcuts() {
 
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [navigate, location])
+  }, [navigate, getCurrentPageContext])
 }
 
 // Helper hook to listen for keyboard shortcuts

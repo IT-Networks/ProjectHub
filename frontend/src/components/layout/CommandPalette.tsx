@@ -38,10 +38,7 @@ export function CommandPalette() {
 
   // Search on query change
   useEffect(() => {
-    if (!query.trim()) {
-      setResults([])
-      return
-    }
+    if (!query.trim()) return
     const timer = setTimeout(async () => {
       try {
         const data = await api.get<{
@@ -81,7 +78,11 @@ export function CommandPalette() {
         navigate('/inbox')
         break
     }
-  }, [navigate])
+  }, [navigate, setOpen, setQuery])
+
+  // Results are only meaningful while the query is non-empty; deriving
+  // this avoids a synchronous setResults([]) inside the search effect.
+  const visibleResults = query.trim() ? results : []
 
   if (!open) return null
 
@@ -115,7 +116,7 @@ export function CommandPalette() {
             autoFocus
           />
           <Command.List className="max-h-[300px] overflow-y-auto p-2">
-            {query && results.length === 0 && (
+            {query && visibleResults.length === 0 && (
               <Command.Empty className="py-6 text-center text-sm text-muted-foreground">
                 Keine Ergebnisse
               </Command.Empty>
@@ -132,7 +133,7 @@ export function CommandPalette() {
               </div>
             )}
 
-            {results.map((item) => (
+            {visibleResults.map((item) => (
               <Command.Item
                 key={`${item.type}-${item.id}`}
                 value={`${item.type}-${item.id}`}

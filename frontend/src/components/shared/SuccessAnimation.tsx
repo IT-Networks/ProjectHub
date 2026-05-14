@@ -17,15 +17,21 @@ export function SuccessAnimation({
 }: SuccessAnimationProps) {
   const [isVisible, setIsVisible] = useState(show)
 
+  // Reveal the animation when `show` flips true — render-time guard so we
+  // don't synchronously setState inside the effect below.
+  const [prevShow, setPrevShow] = useState(show)
+  if (show !== prevShow) {
+    setPrevShow(show)
+    if (show) setIsVisible(true)
+  }
+
   useEffect(() => {
-    if (show) {
-      setIsVisible(true)
-      const timer = setTimeout(() => {
-        setIsVisible(false)
-        onComplete?.()
-      }, duration)
-      return () => clearTimeout(timer)
-    }
+    if (!show) return
+    const timer = setTimeout(() => {
+      setIsVisible(false)
+      onComplete?.()
+    }, duration)
+    return () => clearTimeout(timer)
   }, [show, duration, onComplete])
 
   // Particle config for the confetti variant — generated once via a lazy

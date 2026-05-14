@@ -19,18 +19,24 @@ export function PRListWidget({ config }: Props) {
   const [repos, setRepos] = useState<RepoInfo[]>([])
   const [connected, setConnected] = useState(true)
 
-  const load = async () => {
-    try {
-      const url = config.project_id ? `/pulls/${config.project_id}` : '/pulls'
-      const data = await api.get<{ repos: RepoInfo[]; connected: boolean }>(url)
-      setRepos(data.repos)
-      setConnected(data.connected)
-    } catch { /* offline */ }
-  }
+  const [refreshKey, setRefreshKey] = useState(0)
 
-  useEffect(() => { load() }, [config.project_id])
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const url = config.project_id ? `/pulls/${config.project_id}` : '/pulls'
+        const data = await api.get<{ repos: RepoInfo[]; connected: boolean }>(url)
+        if (cancelled) return
+        setRepos(data.repos)
+        setConnected(data.connected)
+      } catch { /* offline */ }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [config.project_id, refreshKey])
 
-  useSSEEvent('pr_update', () => { load() })
+  useSSEEvent('pr_update', () => setRefreshKey((k) => k + 1))
 
   if (repos.length === 0) {
     return <p className="text-sm text-muted-foreground">Keine GitHub-Repos verknüpft</p>

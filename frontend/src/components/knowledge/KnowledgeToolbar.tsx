@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useKnowledgeStore } from '@/stores/knowledgeStore'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -27,9 +27,13 @@ export function KnowledgeToolbar({ projectId, onAddClick, onResearchClick }: Kno
   const [localQuery, setLocalQuery] = useState(searchQuery)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
-  useEffect(() => {
+  // Sync the debounced local input when the store query changes externally
+  // — render-time guard, no synchronous setState inside an effect.
+  const [prevSearchQuery, setPrevSearchQuery] = useState(searchQuery)
+  if (searchQuery !== prevSearchQuery) {
+    setPrevSearchQuery(searchQuery)
     setLocalQuery(searchQuery)
-  }, [searchQuery])
+  }
 
   const handleSearch = (value: string) => {
     setLocalQuery(value)

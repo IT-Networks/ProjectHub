@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Trash2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useKnowledgeStore } from '@/stores/knowledgeStore'
 import { Button } from '@/components/ui/button'
@@ -7,11 +8,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Textarea } from '@/components/ui/textarea'
 import { useIsOffline } from '@/hooks/useOffline'
 import { ErrorBanner } from './ErrorBanner'
+import { ConfirmDialog } from './ConfirmDialog'
+import { Markdown } from './Markdown'
 
+// Listen-Payload: Metadaten OHNE den vollen result-Text. Der Volltext wird
+// lazy via GET /chat/research/{pid}/{id} nachgeladen, sobald ein Eintrag
+// aufgeklappt wird (spart bei jedem Tab-Aufruf das Übertragen aller
+// LLM-Ergebnistexte).
 interface ResearchItem {
   id: string
   query: string
-  result: string
   model_used: string
   agent_team: string
   created_at: string
@@ -32,25 +38,33 @@ export function ResearchList({ projectId }: Props) {
   const [error, setError] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [importedIds, setImportedIds] = useState<Set<string>>(new Set())
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [resultCache, setResultCache] = useState<Record<string, string>>({})
+  const [loadingResult, setLoadingResult] = useState<string | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    try {
-      const data = await api.get<ResearchItem[]>(`/chat/research/${projectId}`)
-      setItems(data)
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
       try {
-        const imported = await api.get<string[]>(`/knowledge/${projectId}/imports/research`)
-        setImportedIds(new Set(imported))
+        const data = await api.get<ResearchItem[]>(`/chat/research/${projectId}`)
+        if (cancelled) return
+        setItems(data)
+        try {
+          const imported = await api.get<string[]>(`/knowledge/${projectId}/imports/research`)
+          if (!cancelled) setImportedIds(new Set(imported))
+        } catch {
+          // ignore — endpoint may be unavailable in older backend
+        }
       } catch {
-        // ignore — endpoint may be unavailable in older backend
+        if (!cancelled) setItems([])
       }
-    } catch {
-      setItems([])
+      if (!cancelled) setLoading(false)
     }
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [projectId])
+    load()
+    return () => { cancelled = true }
+  }, [projectId, refreshKey])
 
   const handleResearch = async () => {
     if (!query.trim()) return
@@ -60,11 +74,47 @@ export function ResearchList({ projectId }: Props) {
       await api.post(`/chat/research/${projectId}`, { query: query.trim() })
       setQuery('')
       setDialogOpen(false)
-      await load()
+      setRefreshKey((k) => k + 1)
     } catch (e) {
       setError((e as Error).message || 'Recherche fehlgeschlagen')
     }
     setResearching(false)
+  }
+
+  const handleDelete = async (id: string) => {
+    try {
+      await api.del(`/chat/research/${projectId}/${id}`)
+      setItems((prev) => prev.filter((it) => it.id !== id))
+      setResultCache((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+      if (expandedId === id) setExpandedId(null)
+    } catch (e) {
+      setError((e as Error).message || 'Löschen fehlgeschlagen')
+    }
+  }
+
+  const handleToggleExpand = async (id: string) => {
+    if (expandedId === id) {
+      setExpandedId(null)
+      return
+    }
+    setExpandedId(id)
+    // Volltext nur einmal pro Eintrag laden — danach aus dem Cache.
+    if (resultCache[id] === undefined) {
+      setLoadingResult(id)
+      try {
+        const detail = await api.get<{ result: string }>(`/chat/research/${projectId}/${id}`)
+        setResultCache((prev) => ({ ...prev, [id]: detail.result ?? '' }))
+      } catch (e) {
+        setError((e as Error).message || 'Ergebnis konnte nicht geladen werden')
+        setExpandedId((cur) => (cur === id ? null : cur))
+      } finally {
+        setLoadingResult(null)
+      }
+    }
   }
 
   return (
@@ -108,17 +158,27 @@ export function ResearchList({ projectId }: Props) {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setExpandedId(expandedId === item.id ? null : item.id)}
+                  onClick={() => handleToggleExpand(item.id)}
                 >
                   {expandedId === item.id ? 'Einklappen' : 'Anzeigen'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setDeletingId(item.id)}
+                  title="Recherche löschen"
+                >
+                  <Trash2 className="h-4 w-4 text-muted-foreground" />
                 </Button>
               </div>
             </div>
             {expandedId === item.id && (
               <div className="mt-3 rounded bg-muted/50 p-3">
-                <div className="prose prose-sm prose-invert max-w-none whitespace-pre-wrap text-sm">
-                  {item.result}
-                </div>
+                {loadingResult === item.id ? (
+                  <p className="text-sm text-muted-foreground">Lädt Ergebnis…</p>
+                ) : (
+                  <Markdown>{resultCache[item.id] ?? ''}</Markdown>
+                )}
               </div>
             )}
           </Card>
@@ -158,6 +218,18 @@ export function ResearchList({ projectId }: Props) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!deletingId}
+        onOpenChange={() => setDeletingId(null)}
+        title="Recherche löschen"
+        description="Diese Recherche wird dauerhaft gelöscht. Bereits nach Wissen importierte Einträge bleiben erhalten."
+        confirmLabel="Löschen"
+        onConfirm={() => {
+          if (deletingId) handleDelete(deletingId)
+          setDeletingId(null)
+        }}
+      />
     </div>
   )
 }

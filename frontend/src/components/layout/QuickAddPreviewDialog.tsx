@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Sparkles, AlertTriangle } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -59,16 +59,21 @@ export function QuickAddPreviewDialog({ open, draft, projects, onCancel, onSave 
   const [projectId, setProjectId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    if (!draft) return
-    setTitle(draft.title)
-    setDescription(draft.description)
-    setPriority(draft.priority)
-    setDeadline(toLocalInput(draft.deadline))
-    setTags(draft.tags)
-    setProjectId(draft.project_id)
-    setTagInput('')
-  }, [draft])
+  // Populate the form when a new draft arrives — done during render
+  // rather than in an effect to avoid a cascading re-render.
+  const [prevDraft, setPrevDraft] = useState(draft)
+  if (draft !== prevDraft) {
+    setPrevDraft(draft)
+    if (draft) {
+      setTitle(draft.title)
+      setDescription(draft.description)
+      setPriority(draft.priority)
+      setDeadline(toLocalInput(draft.deadline))
+      setTags(draft.tags)
+      setProjectId(draft.project_id)
+      setTagInput('')
+    }
+  }
 
   if (!draft) return null
 

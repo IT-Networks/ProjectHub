@@ -17,16 +17,27 @@ export function SuggestedLinksPanel({ projectId, itemId }: SuggestedLinksPanelPr
   const fetchItemDetail = useKnowledgeStore((s) => s.fetchItemDetail)
 
   const [suggestions, setSuggestions] = useState<SuggestedEdge[]>([])
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [accepted, setAccepted] = useState<Set<string>>(new Set())
+  const [prevItemId, setPrevItemId] = useState(itemId)
+
+  // Reset per-item state when the selected item changes — done during
+  // render (React's sanctioned pattern) rather than synchronously in an
+  // effect, which would trigger a cascading re-render.
+  if (itemId !== prevItemId) {
+    setPrevItemId(itemId)
+    setSuggestions([])
+    setAccepted(new Set())
+    setLoading(true)
+  }
 
   useEffect(() => {
-    setLoading(true)
-    setAccepted(new Set())
+    let cancelled = false
     suggestLinks(projectId, itemId)
-      .then(setSuggestions)
-      .catch(() => setSuggestions([]))
-      .finally(() => setLoading(false))
+      .then((data) => { if (!cancelled) setSuggestions(data) })
+      .catch(() => { if (!cancelled) setSuggestions([]) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [projectId, itemId, suggestLinks])
 
   const handleAccept = async (suggestion: SuggestedEdge) => {

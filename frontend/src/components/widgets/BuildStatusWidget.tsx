@@ -31,19 +31,25 @@ export function BuildStatusWidget({ config }: Props) {
   const [builds, setBuilds] = useState<BuildJob[]>([])
   const [connected, setConnected] = useState(true)
 
-  const load = async () => {
-    try {
-      const url = config.project_id ? `/builds/${config.project_id}` : '/builds'
-      const data = await api.get<{ builds: BuildJob[]; connected: boolean }>(url)
-      setBuilds(data.builds)
-      setConnected(data.connected)
-    } catch { /* offline */ }
-  }
+  const [refreshKey, setRefreshKey] = useState(0)
 
-  useEffect(() => { load() }, [config.project_id])
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const url = config.project_id ? `/builds/${config.project_id}` : '/builds'
+        const data = await api.get<{ builds: BuildJob[]; connected: boolean }>(url)
+        if (cancelled) return
+        setBuilds(data.builds)
+        setConnected(data.connected)
+      } catch { /* offline */ }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [config.project_id, refreshKey])
 
-  // SSE live update
-  useSSEEvent('build_update', () => { load() })
+  // SSE live update — bump the key to re-run the fetch effect
+  useSSEEvent('build_update', () => setRefreshKey((k) => k + 1))
 
   if (builds.length === 0) {
     return <p className="text-sm text-muted-foreground">Keine Jenkins-Jobs verknüpft</p>

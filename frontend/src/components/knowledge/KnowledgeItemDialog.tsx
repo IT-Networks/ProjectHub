@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useKnowledgeStore } from '@/stores/knowledgeStore'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -35,7 +35,12 @@ export function KnowledgeItemDialog({ projectId, open, onOpenChange, editItemId 
   const isEdit = !!editItemId
   const editItem = isEdit ? items.find((i) => i.id === editItemId) : null
 
-  useEffect(() => {
+  // Populate the form when the dialog transitions to open — done during
+  // render (React's sanctioned pattern) rather than synchronously in an
+  // effect, which would trigger a cascading re-render.
+  const [wasOpen, setWasOpen] = useState(false)
+  if (open !== wasOpen) {
+    setWasOpen(open)
     if (open && editItem) {
       setTitle(editItem.title)
       setContent(editItem.content)
@@ -50,7 +55,7 @@ export function KnowledgeItemDialog({ projectId, open, onOpenChange, editItemId 
       setTags([])
       setTagInput('')
     }
-  }, [open, editItem])
+  }
 
   const handleAddTag = () => {
     const tag = tagInput.trim().toLowerCase()

@@ -111,9 +111,28 @@ export function SettingsPage() {
     }
   }
 
+  // Initial silent load on mount. The button-triggered checkStatus() /
+  // fetchVersion() add toasts + busy flags we don't want here, so this
+  // effect inlines a leaner fetch (and avoids a synchronous setState).
   useEffect(() => {
-    checkStatus()
-    fetchVersion()
+    let cancelled = false
+    void (async () => {
+      try {
+        const data = await api.get<AiAssistStatus>('/settings/ai-assist-status')
+        if (!cancelled) setStatus(data)
+      } catch {
+        if (!cancelled) {
+          setStatus({ connected: false, base_url: 'http://localhost:8000', sse_subscribers: 0 })
+        }
+      }
+      try {
+        const v = await api.get<{ version: string }>('/update/version')
+        if (!cancelled) setVersion(v.version)
+      } catch {
+        if (!cancelled) setVersion('?')
+      }
+    })()
+    return () => { cancelled = true }
   }, [])
 
   return (

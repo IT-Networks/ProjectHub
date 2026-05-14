@@ -17,24 +17,30 @@ export function LinkedMessageList({ targetType, targetId }: Props) {
   const [error, setError] = useState('')
   const [unlinkingId, setUnlinkingId] = useState<string | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    setError('')
-    try {
-      const data = await api.get<LinkedMessage[]>(`/inbox/links?link_target=${targetType}&target_id=${targetId}`)
-      setMessages(data)
-    } catch (e) {
-      setMessages([])
-      setError((e as Error).message || 'Fehler beim Laden')
-    }
-    setLoading(false)
-  }
+  const [refreshKey, setRefreshKey] = useState(0)
 
-  useEffect(() => { load() }, [targetType, targetId])
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const data = await api.get<LinkedMessage[]>(`/inbox/links?link_target=${targetType}&target_id=${targetId}`)
+        if (cancelled) return
+        setMessages(data)
+        setError('')
+      } catch (e) {
+        if (cancelled) return
+        setMessages([])
+        setError((e as Error).message || 'Fehler beim Laden')
+      }
+      if (!cancelled) setLoading(false)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [targetType, targetId, refreshKey])
 
   const handleUnlink = async (linkId: string) => {
     await api.del(`/inbox/link/${linkId}`)
-    await load()
+    setRefreshKey((k) => k + 1)
   }
 
   if (loading) return <p className="text-sm text-muted-foreground">Laden...</p>
