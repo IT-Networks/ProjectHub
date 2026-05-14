@@ -26,8 +26,8 @@ export function Sidebar() {
   const favorites = useMemo(() => rawFavorites.sort((a, b) => a.order - b.order), [rawFavorites])
   const recentItems = useMemo(() => {
     const sorted = [...rawRecentItems].sort((a, b) => {
-      const aTime = a.accessedAt instanceof Date ? a.accessedAt.getTime() : new Date(a.accessedAt as any).getTime()
-      const bTime = b.accessedAt instanceof Date ? b.accessedAt.getTime() : new Date(b.accessedAt as any).getTime()
+      const aTime = a.accessedAt instanceof Date ? a.accessedAt.getTime() : new Date(a.accessedAt as string).getTime()
+      const bTime = b.accessedAt instanceof Date ? b.accessedAt.getTime() : new Date(b.accessedAt as string).getTime()
       return bTime - aTime
     })
     return sorted

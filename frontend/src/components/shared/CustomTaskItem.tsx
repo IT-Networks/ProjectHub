@@ -1,6 +1,6 @@
-import { NodeViewWrapper, NodeViewContent } from '@tiptap/react'
+import { NodeViewWrapper, NodeViewContent, type NodeViewProps } from '@tiptap/react'
 
-export function CustomTaskItemView(props: any) {
+export function CustomTaskItemView(props: NodeViewProps) {
   const { node, updateAttributes } = props
   const isChecked = node.attrs.checked
 

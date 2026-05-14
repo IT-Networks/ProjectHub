@@ -31,6 +31,18 @@ interface FavoritesState {
   pruneStale: (validProjectIds: readonly string[]) => { removedFavorites: number; removedRecents: number }
 }
 
+// Shape of the JSON-serialized state read back from localStorage. accessedAt
+// round-trips as a string; merge() rehydrates it to a Date.
+type PersistedFavorites = {
+  favorites?: Favorite[]
+  recentItems?: Array<{
+    id: string
+    type: 'project' | 'todo' | 'note'
+    title: string
+    accessedAt: string | Date
+  }>
+}
+
 export const useFavoritesStore = create<FavoritesState>()(
   persist(
     (set, get) => ({
@@ -157,14 +169,16 @@ export const useFavoritesStore = create<FavoritesState>()(
         favorites: state.favorites,
         recentItems: state.recentItems,
       }),
-      merge: (persisted: any, current: any) => {
+      merge: (persisted, current) => {
         if (!persisted) return current
+        const p = persisted as PersistedFavorites
         return {
           ...current,
-          favorites: persisted.favorites || [],
-          recentItems: (persisted.recentItems || []).map((item: any) => ({
+          favorites: p.favorites || [],
+          recentItems: (p.recentItems || []).map((item) => ({
             ...item,
-            accessedAt: typeof item.accessedAt === 'string' ? new Date(item.accessedAt) : item.accessedAt,
+            accessedAt:
+              typeof item.accessedAt === 'string' ? new Date(item.accessedAt) : item.accessedAt,
           })),
         }
       },
