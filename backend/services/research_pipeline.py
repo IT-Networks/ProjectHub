@@ -108,6 +108,9 @@ _DEFAULT_PROFILES: dict[str, dict[str, Any]] = {
         "max_initial_sub_queries": 5,
         "max_providers_per_sub_query": 1,
         "max_findings_per_provider": 5,
+        "max_lateral_hops": 0,
+        "max_lateral_sub_queries": 0,
+        "relevance_cutoff": 0.6,
         "rerank_mode": "bm25",
         "rerank_top_k": 5,
         "bm25_top_n": 10,
@@ -119,6 +122,9 @@ _DEFAULT_PROFILES: dict[str, dict[str, Any]] = {
         "max_initial_sub_queries": 8,
         "max_providers_per_sub_query": 3,
         "max_findings_per_provider": 10,
+        "max_lateral_hops": 2,
+        "max_lateral_sub_queries": 6,
+        "relevance_cutoff": 0.5,
         "rerank_mode": "auto",
         "rerank_top_k": 8,
         "bm25_top_n": 15,
@@ -319,6 +325,86 @@ async def _run_pipeline(
         return_exceptions=False,
     )
 
+    # ─ Phase 3b: LATERAL EXPANSION (Tief-Mode only) ─
+    # Spec §5.3: take Top-K high-conf findings (≥0.6) from the previous
+    # hop, extract entities, rank against the topic, plan one follow-up
+    # sub-query per top entity. Up to ``max_lateral_hops`` iterations.
+    if depth == "tief" and profile.get("max_lateral_hops", 0) > 0:
+        seen_entities: set[str] = set()
+        for hop in range(1, profile["max_lateral_hops"] + 1):
+            if cancel.is_set():
+                break
+            # Budget guard — skip further hops when pressure is critical+.
+            level = budget.pressure_level()
+            if level in ("critical", "extreme", "exhausted"):
+                budget.record_degradation(f"lateral_hop_{hop}_skipped:{level}")
+                break
+
+            await _emit_progress(project_id, run_id, "lateral", hop=hop)
+            await _patch_run(run_id, current_hop=hop, phase="lateral")
+
+            parent_findings = await _select_high_conf_findings(
+                run_id, min_conf=0.6, top_k=8,
+            )
+            if not parent_findings:
+                break
+
+            # Lazy import — keeps the pipeline module loadable without
+            # the lateral module when Normal-Mode-only deployments care.
+            from services.research_lateral import expand_hop
+
+            expansion = await expand_hop(
+                hop=hop,
+                findings=parent_findings,
+                topic=topic,
+                enabled_providers=enabled_providers,
+                seen_entities=seen_entities,
+                max_new_sub_queries=profile["max_lateral_sub_queries"],
+                max_providers_per_sub_query=profile["max_providers_per_sub_query"],
+                relevance_cutoff=profile["relevance_cutoff"],
+                budget=budget,
+            )
+
+            await sse_hub.emit("research_lateral_planned", {
+                "project_id": project_id,
+                "run_id": run_id,
+                "hop": hop,
+                "extracted": expansion.extracted_count,
+                "surviving": expansion.surviving_count,
+                "selected": expansion.ranked_top,
+                "entities": list(expansion.entity_focus.values()),
+                "new_sub_queries": [
+                    {
+                        "id": sq.id, "question": sq.question,
+                        "providers": sq.providers,
+                        "entity_focus": expansion.entity_focus.get(sq.id),
+                        "relevance": expansion.relevance_scores.get(sq.id),
+                        "parent_finding_ids": expansion.parent_finding_ids.get(sq.id, []),
+                    }
+                    for sq in expansion.new_sub_queries
+                ],
+                "aborted_reason": expansion.aborted_reason,
+            })
+
+            if not expansion.new_sub_queries:
+                # Nothing to expand — no point continuing further hops.
+                break
+
+            await _persist_lateral_sub_queries(run_id, hop, topic, expansion)
+            await _patch_run(
+                run_id,
+                sub_query_count=len(plan.sub_queries)
+                + sum(  # cumulative count across this + earlier hops
+                    1 for _ in expansion.new_sub_queries
+                ),
+            )
+
+            # Run the new sub-queries through the same SEARCH path.
+            await asyncio.gather(
+                *(_run_one_sq(sq) for sq in expansion.new_sub_queries),
+                return_exceptions=False,
+            )
+
     # ─ Phase 3+4: EXTRACT + VALIDATE (STUBS in P6) ─
     # P8 will replace this with claim decomposition + Tier-B grounding
     # + Tier-C critic fan-out via services.research_validation. For now,
@@ -406,6 +492,80 @@ async def _persist_sub_queries(
             row.parent_finding_ids_list = []
             db.add(row)
         await db.commit()
+
+
+async def _persist_lateral_sub_queries(
+    run_id: str, hop: int, topic: str, expansion,
+) -> None:
+    """Persist the lateral sub-queries from one HopExpansion."""
+    async with async_session() as db:
+        for sq in expansion.new_sub_queries:
+            row = ResearchSubQuery(
+                id=sq.id,
+                run_id=run_id,
+                hop=hop,
+                is_lateral=True,
+                question=sq.question or topic,
+                rationale=sq.rationale,
+                priority=sq.priority,
+                status="pending",
+                relevance_score=expansion.relevance_scores.get(sq.id),
+                entity_focus=expansion.entity_focus.get(sq.id),
+            )
+            row.providers_list = sq.providers
+            row.parent_finding_ids_list = expansion.parent_finding_ids.get(sq.id, [])
+            db.add(row)
+        await db.commit()
+
+
+async def _select_high_conf_findings(
+    run_id: str, *, min_conf: float, top_k: int,
+) -> list[dict]:
+    """Return up to ``top_k`` grounded findings with ``confidence >= min_conf``.
+
+    Falls back to the highest-confidence rows when fewer than ``top_k``
+    meet the threshold — so a Tief-run on a low-confidence corpus still
+    has *something* to expand on.
+    """
+    from sqlalchemy import desc
+
+    async with async_session() as db:
+        # Primary path: confidence ≥ threshold.
+        rows = (
+            await db.execute(
+                select(ResearchFinding)
+                .where(ResearchFinding.run_id == run_id)
+                .where(ResearchFinding.status.in_(("grounded", "candidate")))
+                .where(ResearchFinding.confidence.is_not(None))
+                .where(ResearchFinding.confidence >= min_conf)
+                .order_by(desc(ResearchFinding.confidence))
+                .limit(top_k)
+            )
+        ).scalars().all()
+        if rows:
+            return [_finding_to_dict(r) for r in rows]
+        # Fallback: highest-confidence (or null-last) findings.
+        rows = (
+            await db.execute(
+                select(ResearchFinding)
+                .where(ResearchFinding.run_id == run_id)
+                .where(ResearchFinding.status.in_(("grounded", "candidate")))
+                .order_by(desc(ResearchFinding.confidence))
+                .limit(top_k)
+            )
+        ).scalars().all()
+        return [_finding_to_dict(r) for r in rows]
+
+
+def _finding_to_dict(row) -> dict:
+    return {
+        "id": row.id,
+        "title": row.title or "",
+        "snippet": row.snippet or "",
+        "content": row.full_content or "",
+        "provider_key": row.provider_key,
+        "confidence": row.confidence,
+    }
 
 
 async def _patch_sub_query(sq_id: str, **fields) -> None:
