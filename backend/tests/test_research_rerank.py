@@ -59,13 +59,23 @@ def _findings() -> list:
 
 
 class _FakeBudget:
-    """Mock for the future BudgetTracker — just counts reservations."""
+    """Mock for the BudgetTracker — counts both reservations and commits.
+
+    The Q1 fix made every Stage-2 strategy commit after success; without
+    a commit-count here we wouldn't detect a regression that silently
+    drops the commit again. We assert on .commits in the per-strategy
+    happy-path tests below.
+    """
 
     def __init__(self):
         self.reservations: list[tuple[str, int]] = []
+        self.commits: list[tuple[str, int]] = []
 
     async def reserve(self, category: str, tokens: int) -> None:
         self.reservations.append((category, tokens))
+
+    async def commit(self, category: str, tokens: int) -> None:
+        self.commits.append((category, tokens))
 
 
 # ── mode="bm25" / "none" ───────────────────────────────────────────────────
@@ -236,6 +246,136 @@ def test_embedding_mode_uses_brain_embedder_and_sorts(monkeypatch):
     refs = [f.source_ref for f in result.findings]
     assert refs[0] == "c2", f"c2 should be top after embed-cosine, got {refs}"
     assert any(cat == "embedding" for cat, _ in budget.reservations)
+
+
+# ── Q1 regression: every Stage-2 success path commits to the budget ──────
+
+
+def test_embedding_success_commits_to_budget(monkeypatch):
+    """Q1 regression — _rerank_embedding must commit after the embed call,
+    not only reserve. Without commit the snapshot says 0 tokens used."""
+    from services.research_rerank import RerankAdapter
+    import services.embedding.litellm_router as lr
+
+    class _FakeEmbedder:
+        async def embed(self, texts):
+            return [[1.0, 0.0, 0.0] for _ in texts]
+
+        async def embed_one(self, text):
+            return [1.0, 0.0, 0.0]
+
+    monkeypatch.setattr(lr, "LiteLLMEmbedder", lambda: _FakeEmbedder())
+
+    budget = _FakeBudget()
+    _run(RerankAdapter().rerank(
+        "PKCE", _findings(), mode="bm25_embedding", top_k=2, budget=budget,
+    ))
+    assert any(cat == "embedding" for cat, _ in budget.reservations)
+    assert any(cat == "embedding" for cat, _ in budget.commits), (
+        "Q1: _rerank_embedding must commit after a successful embed call"
+    )
+
+
+def test_embedding_failure_does_not_commit(monkeypatch):
+    """Failure → no commit (caller in RerankAdapter catches + falls back).
+    Without this guard a commit-on-failure would inflate the audit trail."""
+    from services.research_rerank import RerankAdapter
+    import services.embedding.litellm_router as lr
+    from services.embedding.protocol import EmbeddingError
+
+    class _BrokenEmbedder:
+        async def embed(self, texts):
+            raise EmbeddingError("upstream down")
+
+    monkeypatch.setattr(lr, "LiteLLMEmbedder", lambda: _BrokenEmbedder())
+
+    budget = _FakeBudget()
+    _run(RerankAdapter().rerank(
+        "PKCE", _findings(), mode="bm25_embedding", top_k=2, budget=budget,
+    ))
+    # Reserved (always, even pre-call) but never committed on failure.
+    assert any(cat == "embedding" for cat, _ in budget.reservations)
+    assert not any(cat == "embedding" for cat, _ in budget.commits)
+
+
+def test_brain_success_commits_to_budget(monkeypatch):
+    """Q1 regression for the brain strategy."""
+    from services.research_rerank import RerankAdapter
+    import services.retrieval.reranker as rer
+
+    class _FakeBrainReranker:
+        async def rerank(self, query, hits, *, top_k, db=None):
+            return list(hits[:top_k])
+
+    monkeypatch.setattr(rer, "get_default_reranker", lambda: _FakeBrainReranker())
+
+    budget = _FakeBudget()
+    _run(RerankAdapter().rerank(
+        "PKCE", _findings(), mode="bm25_brain", top_k=2,
+        bm25_top_n=4, budget=budget,
+    ))
+    assert any(cat == "rerank" for cat, _ in budget.reservations)
+    assert any(cat == "rerank" for cat, _ in budget.commits)
+
+
+def test_llm_batch_success_commits_actual_usage_per_batch(monkeypatch):
+    """Q1 regression — each batch commits with the LLM-reported actual usage.
+
+    The LLM returns ``usage.total_tokens=1234`` per batch; the adapter
+    must surface that, not the per-call estimate.
+    """
+    from services.research_rerank import RerankAdapter
+    import services.synapse_llm as sll
+
+    async def fake_call_json(*a, **k):
+        class R:
+            parsed = [{"id": 1, "score": 0.8}, {"id": 2, "score": 0.5}]
+            ok = True
+            usage = {"total_tokens": 1234}
+        return R()
+
+    monkeypatch.setattr(sll, "call_json", fake_call_json)
+
+    budget = _FakeBudget()
+    # Two batches of size 2 → two commit calls expected.
+    _run(RerankAdapter().rerank(
+        "PKCE", _findings(),  # 5 findings
+        mode="bm25_llm",
+        top_k=2,
+        bm25_top_n=4,
+        batch_size=2,
+        budget=budget,
+    ))
+    rerank_commits = [t for c, t in budget.commits if c == "rerank"]
+    assert len(rerank_commits) >= 2, (
+        f"expected ≥2 rerank commits (one per batch), got {rerank_commits}"
+    )
+    # Each commit was for the actual usage reported by the fake LLM.
+    assert all(t == 1234 for t in rerank_commits)
+
+
+def test_llm_batch_failure_falls_back_to_estimate_commit(monkeypatch):
+    """When call_json doesn't surface .usage, commit the estimate so
+    the audit trail still records the spend."""
+    from services.research_rerank import RerankAdapter
+    import services.synapse_llm as sll
+
+    async def fake_call_json(*a, **k):
+        class R:
+            parsed = []
+            ok = True
+            usage = {}  # no total_tokens → estimate fallback
+        return R()
+
+    monkeypatch.setattr(sll, "call_json", fake_call_json)
+
+    budget = _FakeBudget()
+    _run(RerankAdapter().rerank(
+        "PKCE", _findings(), mode="bm25_llm", top_k=2,
+        bm25_top_n=2, batch_size=2, budget=budget,
+    ))
+    rerank_commits = [t for c, t in budget.commits if c == "rerank"]
+    assert rerank_commits and all(t > 0 for t in rerank_commits)
 
 
 def test_embedding_failure_falls_back_to_bm25(monkeypatch):

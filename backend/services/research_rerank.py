@@ -170,8 +170,9 @@ async def _rerank_embedding(
     from services.embedding.protocol import EmbeddingError
     from services.retrieval.hybrid import cosine_similarity
 
+    est_tokens = len(findings) * 100 + 1000
     if budget is not None and hasattr(budget, "reserve"):
-        await budget.reserve("embedding", len(findings) * 100 + 1000)
+        await budget.reserve("embedding", est_tokens)
 
     embedder = LiteLLMEmbedder()
     try:
@@ -185,6 +186,12 @@ async def _rerank_embedding(
         raise RuntimeError(
             f"embedder returned {len(vectors) if vectors else 0} vectors for {len(texts)} texts"
         )
+
+    # The embedder doesn't return a token count, so we commit the estimate.
+    # rerank/embedding are exempt from the total-cap; the commit is for
+    # observability (snapshot.by_category["embedding"] in the run log).
+    if budget is not None and hasattr(budget, "commit"):
+        await budget.commit("embedding", est_tokens)
 
     q_vec = vectors[0]
     scored = [
@@ -223,8 +230,9 @@ async def _rerank_brain(
     if reranker is None:
         raise RuntimeError("brain_reranker_enabled is off")
 
+    est_tokens = len(findings) * 600 + 1500
     if budget is not None and hasattr(budget, "reserve"):
-        await budget.reserve("rerank", len(findings) * 600 + 1500)
+        await budget.reserve("rerank", est_tokens)
 
     # Minimal shim that quacks like KnowledgeItem for the reranker's
     # ``_format_numbered_docs`` reader.
@@ -243,6 +251,12 @@ async def _rerank_brain(
         for f in findings
     ]
     reranked = await reranker.rerank(query, hits, top_k=top_k, db=None)
+
+    # Brain's reranker doesn't surface token usage (it's behind its own
+    # OfflineCache), so we commit the estimate. Exempt category → no
+    # impact on the total-cap; this is purely audit-trail.
+    if budget is not None and hasattr(budget, "commit"):
+        await budget.commit("rerank", est_tokens)
 
     # Map back to findings by source_ref (the id we set on the shim).
     by_ref = {f.source_ref: f for f in findings}
@@ -301,8 +315,10 @@ async def _rerank_llm_batch(
     """
     from services.synapse_llm import call_json
 
+    est_per_finding = 220
+    est_overhead = 800
     if budget is not None and hasattr(budget, "reserve"):
-        await budget.reserve("rerank", len(findings) * 220 + 800)
+        await budget.reserve("rerank", len(findings) * est_per_finding + est_overhead)
 
     if not findings:
         return []
@@ -324,6 +340,20 @@ async def _rerank_llm_batch(
             for f in batch:
                 scored.append((0.0, len(scored), f))
             continue
+
+        # Commit ACTUAL usage from this batch — call_json returns LLMResult
+        # with a .usage dict carrying total_tokens. Falls back to the
+        # per-batch estimate if the LLM client didn't surface usage.
+        if budget is not None and hasattr(budget, "commit"):
+            usage = getattr(result, "usage", None) or {}
+            actual = (
+                int(usage.get("total_tokens", 0))
+                if isinstance(usage, dict)
+                else 0
+            )
+            if actual <= 0:
+                actual = len(batch) * est_per_finding + est_overhead
+            await budget.commit("rerank", actual)
 
         parsed = result.parsed if (result and result.ok) else None
         if not isinstance(parsed, list):
