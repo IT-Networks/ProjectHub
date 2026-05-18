@@ -22,21 +22,37 @@ Spike note (2026-05-14): no local NLI model is available, so Tier B is
 ``LLMGroundingChecker``. The ``GroundingChecker`` protocol keeps a real
 NLI model (MiniCheck-class) slot-in-able later without touching Tiers C–E.
 
-Pure decision logic (``_aggregate_claim``, ``compute_confidence``,
-``decide_verdict``, ``select_verifier_models``) is kept free of I/O so it
-can be unit-tested directly.
+Pure decision logic (Tier D + verifier-model selection) lives in
+``services/claim_aggregation.py`` so the planned Research-Auto-Mode
+validator can reuse it bit-exact. The legacy symbols ``_aggregate_claim``,
+``compute_confidence``, ``decide_verdict``, ``select_verifier_models``,
+``ClaimVerdict``, ``GroundingResult`` are re-exported below for backward
+compatibility with this module's existing tests.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections import Counter
 from dataclasses import dataclass, field
 from typing import Protocol, TYPE_CHECKING
 
 from config import settings
 from services.synapse_llm import call_json, merge_usage
+from services.claim_aggregation import (
+    # Re-exports for legacy import compatibility (tests + downstream code):
+    ClaimVerdict,
+    GroundingResult,
+    aggregate_claim,
+    decide_verdict,
+    select_verifier_models,
+    # Used internally below:
+    compute_confidence as _compute_confidence_pure,
+    get_synapse_thresholds,
+    VALID_RELATIONS,
+    RELATION_SCORE,
+    CONTRADICTION_CONFIDENCE_CAP,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,22 +60,26 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("projecthub.synapse")
 
-# Claim relations, ordered worst → best for tie-breaking.
-_VALID_RELATIONS = ("contradicted", "unsupported", "partial", "supported")
+# Legacy aliases — kept so tests importing the underscored / private
+# symbols don't break. New code should import from claim_aggregation
+# directly.
+_aggregate_claim = aggregate_claim
+_VALID_RELATIONS = VALID_RELATIONS
+_RELATION_SCORE = RELATION_SCORE
+_CONTRADICTION_CONFIDENCE_CAP = CONTRADICTION_CONFIDENCE_CAP
 
-# How a relation maps to a 0–1 quality score for confidence aggregation.
-_RELATION_SCORE = {
-    "supported": 1.0,
-    "partial": 0.6,
-    "unsupported": 0.2,
-    "contradicted": 0.0,
-}
+
+def compute_confidence(claims: list[ClaimVerdict]) -> tuple[float, str]:
+    """Synapse-defaults wrapper around the pure ``compute_confidence``.
+
+    Tests + callers in this module use the no-argument signature; the
+    pure version takes a ``ConfidenceThresholds`` value object.
+    """
+    return _compute_confidence_pure(claims, get_synapse_thresholds())
+
 
 # Tier B → C escalation: a grounding result this strong skips the critic.
 _GROUNDING_TRUST_THRESHOLD = 0.8
-
-# A synapse with any contradicted claim is capped here, forcing human_review.
-_CONTRADICTION_CONFIDENCE_CAP = 0.4
 
 # Truncation budget for a source item inside a validation prompt.
 _MAX_SOURCE_CHARS = 1100
@@ -69,29 +89,6 @@ _LLM_SEMAPHORE = asyncio.Semaphore(max(1, settings.synapse_max_llm_concurrency))
 
 
 # --- Data structures --------------------------------------------------------
-
-@dataclass
-class GroundingResult:
-    """Outcome of a Tier-B grounding check for one claim."""
-
-    relation: str            # supported | contradicted | unsupported | partial
-    score: float             # 0–1 confidence in the relation
-    evidence: list[dict] = field(default_factory=list)
-    # [{"item_id": "...", "span": "..."}]
-
-
-@dataclass
-class ClaimVerdict:
-    """Final per-claim outcome after grounding + (optional) critic fan-out."""
-
-    claim_text: str
-    source_item_ids: list[str]
-    relation: str
-    evidence: list[dict]
-    nli_score: float | None
-    verifier_agreement: float
-    verifier_votes: dict
-
 
 @dataclass
 class SynapseValidation:
@@ -214,22 +211,6 @@ Regeln:
 - Sei skeptisch bei Mengenangaben, Superlativen, Kausalbehauptungen."""
 
 
-def select_verifier_models(
-    configured: list[str], samples: int
-) -> list[str | None]:
-    """Decide which models the critic fan-out runs on.
-
-    With ≥2 configured models, cycle through them for ``samples`` calls —
-    real answer diversity. With 0 or 1 configured model, return a single
-    ``None`` (engine default): repeating identical calls adds cost without
-    diversity, so there is no point fanning out.
-    """
-    samples = max(1, samples)
-    if len(configured) >= 2:
-        return [configured[i % len(configured)] for i in range(samples)]
-    return [None]
-
-
 async def _critic_fanout(
     claim_text: str, sources: list[SourceItem], usage_acc: dict
 ) -> list[str]:
@@ -257,92 +238,9 @@ async def _critic_fanout(
     return votes
 
 
-# --- Aggregation (Tier D) — pure --------------------------------------------
-
-def _aggregate_claim(
-    claim_text: str,
-    source_item_ids: list[str],
-    grounding: GroundingResult,
-    critic_votes: list[str],
-) -> ClaimVerdict:
-    """Combine the grounding result and critic votes into one ClaimVerdict."""
-    if critic_votes:
-        tally = Counter(critic_votes)
-        # Tie-break toward the more severe relation (lower index in _VALID_RELATIONS).
-        top = max(tally.values())
-        relation = min(
-            (r for r, c in tally.items() if c == top),
-            key=_VALID_RELATIONS.index,
-        )
-        agreement = top / len(critic_votes)
-        votes = dict(tally)
-    else:
-        # No critic signal — trust the grounding tier.
-        relation = grounding.relation
-        agreement = grounding.score
-        votes = {}
-
-    return ClaimVerdict(
-        claim_text=claim_text,
-        source_item_ids=source_item_ids,
-        relation=relation,
-        evidence=grounding.evidence,
-        nli_score=grounding.score,
-        verifier_agreement=round(agreement, 3),
-        verifier_votes=votes,
-    )
-
-
-def compute_confidence(claims: list[ClaimVerdict]) -> tuple[float, str]:
-    """Composite 0–1 synapse confidence + its band.
-
-    Each claim contributes ``(0.7·relation_score + 0.3·nli_score)`` scaled
-    by verifier agreement. Any contradicted claim caps the whole synapse
-    low — a single refuted claim should never read as trustworthy.
-    """
-    if not claims:
-        return 0.0, "low"
-
-    total = 0.0
-    for c in claims:
-        base = _RELATION_SCORE.get(c.relation, 0.0)
-        nli = c.nli_score if c.nli_score is not None else base
-        raw = 0.7 * base + 0.3 * nli
-        # Low agreement = uncertain → damp toward 0, but never fully erase.
-        total += raw * (0.5 + 0.5 * c.verifier_agreement)
-    confidence = total / len(claims)
-
-    if any(c.relation == "contradicted" for c in claims):
-        confidence = min(confidence, _CONTRADICTION_CONFIDENCE_CAP)
-
-    if confidence >= settings.synapse_confidence_high:
-        band = "high"
-    elif confidence >= settings.synapse_confidence_review:
-        band = "medium"
-    else:
-        band = "low"
-    return round(confidence, 3), band
-
-
-def decide_verdict(
-    confidence: float, band: str, claims: list[ClaimVerdict]
-) -> tuple[str, list[str]]:
-    """Map (confidence, band, claims) → verdict + human-readable defects."""
-    defects: list[str] = []
-    for i, c in enumerate(claims, start=1):
-        if c.relation == "contradicted":
-            defects.append(f"Aussage {i} wird von den Quellen widersprochen")
-        elif c.relation == "unsupported":
-            defects.append(f"Aussage {i} ist durch keine Quelle belegt")
-        elif c.relation == "partial":
-            defects.append(f"Aussage {i} ist stärker formuliert als belegt")
-
-    has_contradiction = any(c.relation == "contradicted" for c in claims)
-    if has_contradiction or band == "low":
-        return "human_review", defects
-    if band == "high":
-        return "persist", defects
-    return "persist_flagged", defects
+# --- Aggregation (Tier D) ---------------------------------------------------
+# Pure decision logic lives in ``services/claim_aggregation.py``;
+# imported + re-exported at the top of this module for backward compat.
 
 
 # --- Orchestrator (Tier E: persist) -----------------------------------------
