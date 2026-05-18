@@ -405,14 +405,11 @@ async def _run_pipeline(
                 return_exceptions=False,
             )
 
-    # ─ Phase 3+4: EXTRACT + VALIDATE (STUBS in P6) ─
-    # P8 will replace this with claim decomposition + Tier-B grounding
-    # + Tier-C critic fan-out via services.research_validation. For now,
-    # mark every candidate finding as "grounded" so the persist step has
-    # something to write — that matches the design's "degrade to BM25
-    # ordering" defaults under tight budget.
+    # ─ Phase 4: VALIDATE (Tier-B + optional Tier-C per finding, P8) ─
     await _emit_progress(project_id, run_id, "validating", hop=0)
-    grounded_count = await _stub_validate_all(run_id, cancel)
+    grounded_count, flagged_count, rejected_count = await _validate_all_findings(
+        run_id, topic=topic, depth=depth, budget=budget, cancel=cancel,
+    )
 
     if cancel.is_set():
         await _finalise(run_id, status="cancelled",
@@ -608,16 +605,22 @@ async def _persist_finding(
     return fid
 
 
-async def _stub_validate_all(run_id: str, cancel: asyncio.Event) -> int:
-    """STUB validate: mark every candidate finding as "grounded".
+async def _validate_all_findings(
+    run_id: str, *, topic: str, depth: str,
+    budget: BudgetTracker,
+    cancel: asyncio.Event,
+) -> tuple[int, int, int]:
+    """Run Tier-B (+ optional Tier-C) on every candidate finding.
 
-    P8 replaces this with the real Tier-B + Tier-C pipeline. The
-    intermediate behaviour mirrors the "BM25-only" fallback from the
-    rerank adapter — we trust the provider ordering and let the user
-    accept/reject in the UI.
+    Returns (grounded_count, flagged_count, rejected_count).
+    Updates ``ResearchFinding.status`` + ``extra_data.validation`` per row.
+    Replaces the P6 stub that marked everything "grounded".
     """
     if cancel.is_set():
-        return 0
+        return 0, 0, 0
+
+    # Read candidates with full content into memory so the validator
+    # doesn't hold a long DB transaction during LLM calls.
     async with async_session() as db:
         rows = (
             await db.execute(
@@ -627,13 +630,119 @@ async def _stub_validate_all(run_id: str, cancel: asyncio.Event) -> int:
                 )
             )
         ).scalars().all()
-        count = 0
-        for row in rows:
-            row.status = "grounded"
-            row.updated_at = _now()
-            count += 1
+        cands = [
+            (
+                r.id, r.title or "", r.snippet or "", r.full_content,
+                r.source_ref or "", r.provider_key or "",
+            )
+            for r in rows
+        ]
+
+    if not cands:
+        return 0, 0, 0
+
+    # Lazy import keeps validation modules optional for non-Auto-Mode tests.
+    from services.research_validation import (
+        validate_finding,
+        _DEFAULT_THRESHOLDS,
+        _DEFAULT_THRESHOLDS_TIEF,
+    )
+    from config import settings
+
+    enable_critic = (depth == "tief")
+    thresholds = _DEFAULT_THRESHOLDS_TIEF if enable_critic else _DEFAULT_THRESHOLDS
+    verifier_models = list(getattr(settings, "synapse_verifier_models", []) or [])
+    verifier_samples = int(getattr(settings, "synapse_verifier_samples", 3) or 3)
+
+    grounded = flagged = rejected = 0
+    for fid, title, snippet, content, source_ref, provider_key in cands:
+        if cancel.is_set():
+            break
+        # Budget guard between findings: if pressure hit "extreme" we
+        # stop pulling further LLM calls and flag the remaining rows.
+        if budget.pressure_level() in ("extreme", "exhausted"):
+            budget.record_degradation("validation_aborted:budget_pressure")
+            await _mark_finding_flagged_no_validation(fid, "budget_extreme")
+            flagged += 1
+            continue
+
+        outcome = await validate_finding(
+            topic=topic, title=title, snippet=snippet,
+            full_content=content, source_ref=source_ref,
+            provider_key=provider_key,
+            enable_critic_fanout=enable_critic,
+            thresholds=thresholds,
+            verifier_models=verifier_models,
+            verifier_samples=verifier_samples,
+            budget=budget,
+        )
+        await _patch_finding_after_validation(fid, outcome)
+
+        if outcome.new_status == "grounded":
+            grounded += 1
+        elif outcome.new_status == "flagged":
+            flagged += 1
+        elif outcome.new_status == "rejected":
+            rejected += 1
+
+    await _patch_run(
+        run_id,
+        validated_count=grounded,
+        flagged_count=flagged,
+        rejected_count=rejected,
+    )
+    return grounded, flagged, rejected
+
+
+async def _patch_finding_after_validation(fid: str, outcome) -> None:
+    """Persist a FindingValidation outcome onto its ResearchFinding row."""
+    async with async_session() as db:
+        row = await db.scalar(
+            select(ResearchFinding).where(ResearchFinding.id == fid)
+        )
+        if row is None:
+            return
+        row.status = outcome.new_status
+        row.confidence = outcome.confidence
+        extra = row.extra_data_dict
+        extra["validation"] = {
+            "verdict": outcome.verdict,
+            "confidence_band": outcome.confidence_band,
+            "tier_b": {
+                "relation": outcome.tier_b_relation,
+                "score": outcome.tier_b_score,
+            },
+            "tier_c": {
+                "votes": outcome.critic_votes,
+                "vote_count": len(outcome.critic_votes),
+            } if outcome.critic_votes else None,
+            "defects": outcome.defects,
+        }
+        row.extra_data_dict = extra
+        row.updated_at = _now()
         await db.commit()
-    return count
+
+
+async def _mark_finding_flagged_no_validation(fid: str, reason: str) -> None:
+    """Set status=flagged when validation was skipped under budget pressure."""
+    async with async_session() as db:
+        row = await db.scalar(
+            select(ResearchFinding).where(ResearchFinding.id == fid)
+        )
+        if row is None:
+            return
+        row.status = "flagged"
+        extra = row.extra_data_dict
+        extra["validation"] = {
+            "verdict": "human_review",
+            "confidence_band": "low",
+            "tier_b": None,
+            "tier_c": None,
+            "defects": [f"Validation übersprungen: {reason}"],
+        }
+        row.extra_data_dict = extra
+        row.updated_at = _now()
+        await db.commit()
 
 
 async def _persist_grounded_as_knowledge_items(

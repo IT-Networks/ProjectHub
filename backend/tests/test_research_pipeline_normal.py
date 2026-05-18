@@ -177,6 +177,25 @@ def _patch_planner_with_concrete_plan(monkeypatch, sub_queries: list[dict]):
     monkeypatch.setattr(pipe, "plan_subqueries", fake_plan)
 
 
+def _patch_validation_supported(monkeypatch):
+    """Patch synapse_llm.call_json (used by research_validation) so
+    every finding's Tier-B grounding returns ``relation="supported"``.
+
+    Without this the pipeline would hit the real AI-Assist for each
+    finding's validation, which doesn't exist in tests.
+    """
+    import services.research_validation as rv
+
+    async def fake_call_json(prompt, model=None, session_prefix=None):
+        class R:
+            parsed = {"relation": "supported", "score": 0.9, "reason": "ok"}
+            ok = True
+            usage = {"total_tokens": 500}
+        return R()
+
+    monkeypatch.setattr(rv, "call_json", fake_call_json)
+
+
 async def _collect_sse_until_complete(
     filter_types: set[str], timeout: float = 5.0,
 ):
@@ -230,6 +249,7 @@ def test_normal_run_persists_findings_and_finalises_ok(monkeypatch, initdb):
         {"id": secrets.token_hex(8), "question": "How is X built?",
          "providers": ["fake_b"], "rationale": "test", "priority": 1},
     ])
+    _patch_validation_supported(monkeypatch)
 
     _run(run_research(pid, rid))
 
@@ -277,6 +297,7 @@ def test_normal_run_writes_budget_snapshot_to_token_usage(monkeypatch, initdb):
         {"id": secrets.token_hex(8), "question": "q", "providers": ["fake_a"],
          "rationale": "r", "priority": 1},
     ])
+    _patch_validation_supported(monkeypatch)
 
     _run(run_research(pid, rid))
 
@@ -398,6 +419,7 @@ def test_planner_failure_uses_fallback_plan(monkeypatch, initdb):
         return R()
 
     monkeypatch.setattr(planner, "call_json", fake_call_json)
+    _patch_validation_supported(monkeypatch)
 
     _run(run_research(pid, rid))
 
@@ -434,6 +456,7 @@ def test_sse_emits_expected_event_sequence(monkeypatch, initdb):
         {"id": secrets.token_hex(8), "question": "q", "providers": ["fake_a"],
          "rationale": "r", "priority": 1},
     ])
+    _patch_validation_supported(monkeypatch)
 
     async def _go():
         # Collect events in parallel with the pipeline run.

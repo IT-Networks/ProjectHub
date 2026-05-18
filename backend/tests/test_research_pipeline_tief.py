@@ -201,6 +201,25 @@ def _patch_lateral_stages(monkeypatch, *, ranked_relevance: float = 0.9):
     monkeypatch.setattr(rl, "call_json", fake)
 
 
+def _patch_validation_supported(monkeypatch):
+    """Patch validation's call_json so Tier-B always returns 'supported'.
+
+    Required for Tief-Mode tests since the validation phase now runs
+    for real (P8 replaced the stub). Without this every test would hit
+    the unreachable AI-Assist endpoint.
+    """
+    import services.research_validation as rv
+
+    async def fake(*a, **k):
+        class R:
+            parsed = {"relation": "supported", "score": 0.9, "reason": "ok"}
+            ok = True
+            usage = {"total_tokens": 500}
+        return R()
+
+    monkeypatch.setattr(rv, "call_json", fake)
+
+
 # ── Happy path: tief run produces lateral sub-queries ─────────────────────
 
 
@@ -220,6 +239,7 @@ def test_tief_run_produces_lateral_sub_queries(monkeypatch, initdb):
          "providers": ["fake_a"], "rationale": "initial", "priority": 1},
     ])
     _patch_lateral_stages(monkeypatch, ranked_relevance=0.9)
+    _patch_validation_supported(monkeypatch)
 
     _run(run_research(pid, rid))
 
@@ -269,6 +289,8 @@ def test_normal_run_does_not_expand_laterally(monkeypatch, initdb):
         raise AssertionError("Normal-mode triggered lateral expansion!")
 
     monkeypatch.setattr(rl, "call_json", must_not_call)
+    # Validation still runs (Normal-Mode validates too) — stub it.
+    _patch_validation_supported(monkeypatch)
 
     _run(run_research(pid, rid))
 
@@ -301,6 +323,7 @@ def test_tief_run_emits_lateral_planned_sse(monkeypatch, initdb):
          "providers": ["fake_a"], "rationale": "r", "priority": 1},
     ])
     _patch_lateral_stages(monkeypatch, ranked_relevance=0.9)
+    _patch_validation_supported(monkeypatch)
 
     received: list[dict] = []
 
@@ -359,6 +382,9 @@ def test_tief_run_skips_lateral_at_critical_pressure(monkeypatch, initdb):
         raise AssertionError("budget pressure should have blocked the hop")
 
     monkeypatch.setattr(rl, "call_json", must_not_call)
+    # Validation phase still needs a mock (it runs even at critical pressure
+    # until the per-finding budget guard fires).
+    _patch_validation_supported(monkeypatch)
 
     # Monkeypatch the tracker's pressure_level to report critical so the
     # pipeline's budget guard short-circuits. Patching at class level so
