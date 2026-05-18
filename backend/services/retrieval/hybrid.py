@@ -225,6 +225,7 @@ async def hybrid_search(
     pool_size: int = 30,
     embedder: Embedder | None = None,
     mode: str = "hybrid",
+    reranker: "object | None" = None,
 ) -> list[SearchHit]:
     """Search the project for items matching ``query``.
 
@@ -240,6 +241,13 @@ async def hybrid_search(
             back to ``fts`` regardless of mode.
         mode: ``"fts"`` | ``"cosine"`` | ``"hybrid"``. Unknown modes default
             to hybrid.
+        reranker: optional ``Reranker`` (see ``services/retrieval/reranker``).
+            When given AND the fused pool has ≥2 items, the reranker
+            reorders the pool by LLM-judged relevance before truncation
+            to ``top_k``. ``None`` skips Stage 2 (caller gets RRF order).
+            The reranker MUST be a Reranker-protocol instance; typing is
+            ``object`` to avoid circular-import on the hybrid → reranker
+            edge.
 
     Returns:
         Top-K ``SearchHit`` list ordered best-first.
@@ -280,19 +288,22 @@ async def hybrid_search(
     if not fused:
         return []
 
-    fused_top = fused[:top_k]
-    rank_of = {item_id: i + 1 for i, item_id in enumerate(fused_top)}
+    # When a reranker is plumbed in, hydrate the FULL pool (up to pool_size)
+    # — Stage 2 needs all candidates available for the LLM-judge. Without
+    # a reranker we slice to top_k immediately to save the hydrate round-trip.
+    pool_for_hydrate = fused if reranker is not None else fused[:top_k]
+    rank_of = {item_id: i + 1 for i, item_id in enumerate(pool_for_hydrate)}
 
-    # ── Hydrate KnowledgeItems for the fused ids, preserving order ──
+    # ── Hydrate KnowledgeItems for the pool ids, preserving order ──
     items_res = await db.execute(
-        select(KnowledgeItem).where(KnowledgeItem.id.in_(fused_top))
+        select(KnowledgeItem).where(KnowledgeItem.id.in_(pool_for_hydrate))
     )
     items_by_id = {it.id: it for it in items_res.scalars().all()}
 
     fts_set = set(fts_ids)
     cos_set = set(cos_ids)
-    out: list[SearchHit] = []
-    for item_id in fused_top:
+    pool_hits: list[SearchHit] = []
+    for item_id in pool_for_hydrate:
         item = items_by_id.get(item_id)
         if item is None:
             continue
@@ -305,6 +316,17 @@ async def hybrid_search(
         # that just want "best first ordering"; RRF's raw score is harder
         # to interpret cross-query.
         score = 1.0 / rank_of[item_id]
-        out.append(SearchHit(item=item, score=score, source=source))
+        pool_hits.append(SearchHit(item=item, score=score, source=source))
 
-    return out
+    # ── Stage 2 — optional rerank ─────────────────────────────────────
+    # The reranker MUST NOT raise; on failure it returns the input order.
+    # We respect ``top_k`` regardless of whether rerank actually applied.
+    if reranker is not None and len(pool_hits) > 1:
+        try:
+            return await reranker.rerank(query, pool_hits, top_k=top_k, db=db)
+        except Exception as e:  # noqa: BLE001 — never sink the search call
+            logger.warning(
+                "hybrid_search: reranker raised, falling back to RRF order: %s", e
+            )
+
+    return pool_hits[:top_k]
