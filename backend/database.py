@@ -118,6 +118,47 @@ async def init_db():
             except Exception:
                 pass  # Column already exists
 
+        # ── P10 — Bi-temporal SynapseClaim columns ─────────────────────────
+        # Additive; old rows get valid_from = their created_at (best effort)
+        # so the "currently-valid" filter (valid_to IS NULL) immediately
+        # returns every existing claim. We DON'T touch valid_to / superseded_by
+        # — NULL is the right default ("currently valid", "never superseded").
+        for ddl in (
+            "ALTER TABLE synapse_claims ADD COLUMN valid_from TEXT DEFAULT ''",
+            "ALTER TABLE synapse_claims ADD COLUMN valid_to TEXT",
+            "ALTER TABLE synapse_claims ADD COLUMN superseded_by TEXT",
+            "ALTER TABLE synapse_claims ADD COLUMN updated_at TEXT DEFAULT ''",
+        ):
+            try:
+                await conn.execute(__import__("sqlalchemy").text(ddl))
+            except Exception:
+                pass  # Column already exists
+
+        # Backfill valid_from = created_at for legacy rows so existing
+        # claims remain queryable via the bi-temporal API. Idempotent —
+        # only touches rows where valid_from is still empty.
+        try:
+            await conn.execute(__import__("sqlalchemy").text(
+                "UPDATE synapse_claims SET valid_from = created_at "
+                "WHERE valid_from IS NULL OR valid_from = ''"
+            ))
+            await conn.execute(__import__("sqlalchemy").text(
+                "UPDATE synapse_claims SET updated_at = created_at "
+                "WHERE updated_at IS NULL OR updated_at = ''"
+            ))
+        except Exception:
+            pass
+
+        # Bi-temporal lookup index — speeds up "claims valid on date X"
+        # and "currently-valid claims for synapse Y" queries.
+        try:
+            await conn.execute(__import__("sqlalchemy").text(
+                "CREATE INDEX IF NOT EXISTS ix_synapse_claims_validity "
+                "ON synapse_claims(synapse_id, valid_from, valid_to)"
+            ))
+        except Exception:
+            pass
+
 
 async def get_db() -> AsyncSession:
     """Dependency for FastAPI routes."""

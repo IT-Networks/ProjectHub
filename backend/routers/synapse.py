@@ -105,6 +105,11 @@ class ClaimResponse(BaseModel):
     nli_score: float | None
     verifier_agreement: float
     verifier_votes: dict
+    # P10 — bi-temporal fields. ``valid_to is None`` ⇒ "currently true".
+    valid_from: str = ""
+    valid_to: str | None = None
+    superseded_by: str | None = None
+    is_current: bool = True
 
 
 class SynapseDetailResponse(SynapseResponse):
@@ -193,6 +198,10 @@ def _claim_to_response(claim: SynapseClaim) -> ClaimResponse:
         nli_score=claim.nli_score,
         verifier_agreement=claim.verifier_agreement,
         verifier_votes=claim.verifier_votes_dict,
+        valid_from=claim.valid_from or claim.created_at,
+        valid_to=claim.valid_to,
+        superseded_by=claim.superseded_by,
+        is_current=claim.is_current,
     )
 
 
@@ -295,9 +304,12 @@ async def list_synapses(
         return []
 
     # One grouped query for claim counts — avoids N+1.
+    # P10: count CURRENT claims only (valid_to IS NULL). The history rows
+    # would inflate this number after each regeneration.
     counts_result = await db.execute(
         select(SynapseClaim.synapse_id, func.count(SynapseClaim.id))
         .where(SynapseClaim.synapse_id.in_([s.id for s in synapses]))
+        .where(SynapseClaim.valid_to.is_(None))
         .group_by(SynapseClaim.synapse_id)
     )
     claim_counts = {sid: cnt for sid, cnt in counts_result.all()}
@@ -496,8 +508,31 @@ async def ask(
 
 @router.get("/{project_id}/synapses/{synapse_id}")
 async def get_synapse(
-    project_id: str, synapse_id: str, db: AsyncSession = Depends(get_db)
+    project_id: str,
+    synapse_id: str,
+    as_of: str | None = Query(
+        None,
+        description=(
+            "ISO timestamp — return claims that were valid at this "
+            "moment. Default: currently-valid claims only."
+        ),
+    ),
+    include_history: bool = Query(
+        False,
+        description=(
+            "If true, return ALL claim versions (current + superseded). "
+            "Mutually exclusive with as_of — as_of wins."
+        ),
+    ),
+    db: AsyncSession = Depends(get_db),
 ) -> SynapseDetailResponse:
+    """Get a synapse plus its claims.
+
+    Bi-temporal querying (P10):
+        * default                 → currently-valid claims (valid_to IS NULL)
+        * ?as_of=2026-03-01T00:00 → claims valid AT that moment
+        * ?include_history=true   → every claim version, oldest-first
+    """
     syn = await db.scalar(
         select(Synapse).where(
             Synapse.id == synapse_id, Synapse.project_id == project_id
@@ -506,12 +541,21 @@ async def get_synapse(
     if not syn:
         raise HTTPException(404, "Synapse nicht gefunden")
 
-    claims_result = await db.execute(
-        select(SynapseClaim)
-        .where(SynapseClaim.synapse_id == synapse_id)
-        .order_by(SynapseClaim.created_at)
-    )
-    claims = list(claims_result.scalars().all())
+    # Claim-selection strategy
+    if as_of:
+        from services.synapse_claims_bitemporal import claims_as_of
+        claims = await claims_as_of(db, synapse_id, as_of)
+    elif include_history:
+        result = await db.execute(
+            select(SynapseClaim)
+            .where(SynapseClaim.synapse_id == synapse_id)
+            .order_by(SynapseClaim.valid_from, SynapseClaim.created_at)
+        )
+        claims = list(result.scalars().all())
+    else:
+        from services.synapse_claims_bitemporal import current_claims
+        claims = await current_claims(db, synapse_id)
+
     defects = syn.extra_data_dict.get("validation", {}).get("defects", [])
 
     base = _synapse_to_response(syn, len(claims))
@@ -591,9 +635,11 @@ async def review_synapse(
 
     await db.commit()
 
+    # P10: only currently-valid claims count toward the UI's "X claims" badge.
     claim_count = await db.scalar(
         select(func.count(SynapseClaim.id)).where(
-            SynapseClaim.synapse_id == synapse_id
+            SynapseClaim.synapse_id == synapse_id,
+            SynapseClaim.valid_to.is_(None),
         )
     ) or 0
     return _synapse_to_response(syn, int(claim_count))

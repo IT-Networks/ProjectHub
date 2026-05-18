@@ -222,11 +222,28 @@ class SynapseClaim(Base):
     claims, grounds each against the source items (LLM-as-NLI) and runs a
     parallel critic fan-out. ``evidence`` holds the supporting/contradicting
     spans; ``verifier_votes`` holds the raw per-relation vote tally.
+
+    Bi-temporal (P10):
+        * ``valid_from`` / ``valid_to`` form a closed-open validity window
+          (``valid_to is None`` = currently valid). When a synapse is
+          re-generated and a claim is updated, the old row keeps its
+          history — its ``valid_to`` is set to the new timestamp and
+          ``superseded_by`` links to the new row.
+        * ``updated_at`` is the transaction-time companion to the
+          valid-time window: when the row was last *written*, regardless
+          of when the claim was *true*. This is what audit / replay tools
+          read to answer "what did the system know on day X".
     """
 
     __tablename__ = "synapse_claims"
     __table_args__ = (
         Index("ix_synapse_claims_synapse", "synapse_id"),
+        # Bi-temporal lookups: "all currently-valid claims for synapse Y"
+        # and "what was true on date X" both hit this index.
+        Index(
+            "ix_synapse_claims_validity",
+            "synapse_id", "valid_from", "valid_to",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True)
@@ -244,6 +261,25 @@ class SynapseClaim(Base):
     # JSON: {"supported": 4, "partial": 1}
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
 
+    # ── Bi-temporal fields (P10) ──────────────────────────────────────
+    # valid_from defaults to created_at on the SQL side via DEFAULT clause
+    # in the migration; new rows still set it explicitly in code to keep
+    # the model usable without hitting the DB default.
+    valid_from: Mapped[str] = mapped_column(String(30), default=_now)
+    # ``None`` = currently valid; an ISO timestamp = the moment this claim
+    # was superseded by a newer row.
+    valid_to: Mapped[str | None] = mapped_column(
+        String(30), nullable=True, default=None
+    )
+    # FK-like reference (no actual FK constraint; we don't want cascades to
+    # break the supersede chain if the new claim is later deleted).
+    superseded_by: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, default=None
+    )
+    # Transaction-time: when this ROW was last written. ``created_at`` is
+    # immutable; ``updated_at`` moves whenever the row is modified.
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now)
+
     @property
     def evidence_list(self) -> list[dict]:
         return json.loads(self.evidence) if self.evidence else []
@@ -259,6 +295,11 @@ class SynapseClaim(Base):
     @verifier_votes_dict.setter
     def verifier_votes_dict(self, value: dict):
         self.verifier_votes = json.dumps(value)
+
+    @property
+    def is_current(self) -> bool:
+        """True when the claim is currently valid (valid_to is open)."""
+        return self.valid_to is None
 
 
 class SynapseGenerationRun(Base):
