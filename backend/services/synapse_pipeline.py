@@ -145,6 +145,45 @@ async def run_synapse_generation(project_id: str, run_id: str) -> None:
                     current=i, total=len(synapses),
                 )
 
+            # --- Phase: synthesise_hierarchy (P5) ---
+            # Optional Level-N pass over the Level-0 synapses, MS-GraphRAG
+            # style. Gated by brain_hierarchical_synapses_enabled — default
+            # OFF so existing deployments are unaffected until the flag flips.
+            hierarchy_stats = None
+            try:
+                from config import settings as _settings
+
+                hierarchy_on = bool(
+                    getattr(_settings, "brain_hierarchical_synapses_enabled", False)
+                )
+            except Exception:  # pragma: no cover — defensive
+                hierarchy_on = False
+
+            if hierarchy_on and val_stats.persisted + val_stats.flagged >= 2:
+                # Need at least 2 validated parents at L0 before clustering
+                # is meaningful. (DEFAULT_MIN_SYNAPSES=2 in the hierarchy module.)
+                run.phase = "synthesise_hierarchy"
+                await db.commit()
+                await _emit(project_id, run_id, "synthesise_hierarchy")
+                try:
+                    from services.synapse_hierarchy import run_hierarchy_phase
+
+                    hierarchy_stats = await run_hierarchy_phase(
+                        db, project_id, run_id=run_id, max_level=2,
+                    )
+                    logger.info(
+                        "[hierarchy] project=%s levels=%d synapses=%d skipped=%d",
+                        project_id,
+                        hierarchy_stats.levels_built,
+                        hierarchy_stats.synapses_created,
+                        hierarchy_stats.skipped_clusters,
+                    )
+                except Exception as e:  # noqa: BLE001 — must not sink the whole run
+                    logger.warning(
+                        "[hierarchy] phase failed for project %s: %s", project_id, e
+                    )
+                    # Continue to finalise — Level-0 synapses are still good.
+
             # --- Finalise ---
             run.validated_count = val_stats.persisted
             run.flagged_count = val_stats.flagged
@@ -152,6 +191,10 @@ async def run_synapse_generation(project_id: str, run_id: str) -> None:
             run.token_usage_dict = _combine_usage(
                 extraction.usage, synth.usage, val_stats.usage
             )
+            # Bump synapse_count to include Level-N synapses, since they
+            # show up under the same project in the UI.
+            if hierarchy_stats is not None:
+                run.synapse_count = (run.synapse_count or 0) + hierarchy_stats.synapses_created
             run.phase = "done"
             run.status = "ok"
             run.finished_at = _now()

@@ -307,6 +307,83 @@ async def list_synapses(
     ]
 
 
+@router.get("/{project_id}/hierarchy")
+async def get_hierarchy(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Tree of validated synapses across all levels (P5, T5.3).
+
+    Response shape::
+
+        {
+          "max_level": 2,
+          "level_counts": {"0": 12, "1": 3, "2": 1},
+          "nodes": [
+            {
+              "id": "...",
+              "title": "...",
+              "summary_plain": "...",
+              "confidence": 0.87,
+              "confidence_band": "high",
+              "verdict": "persist",
+              "community_level": 0,
+              "parent_id": "abc...",         // points UP to Level-1 parent
+              "source_count": 5
+            },
+            ...
+          ]
+        }
+
+    Frontend builds the tree client-side from ``parent_id`` — keeps the
+    server-side query flat and cacheable, and lets the UI toggle between
+    flat and tree without a second request.
+
+    Only ``status='validated'`` synapses with verdict in {persist,
+    persist_flagged} are included — the "tree" should reflect what's
+    trusted, not the human-review queue. (The review queue has its own
+    endpoint.)
+    """
+    await _ensure_project(db, project_id)
+
+    result = await db.execute(
+        select(Synapse).where(
+            Synapse.project_id == project_id,
+            Synapse.status == "validated",
+            Synapse.verdict.in_(["persist", "persist_flagged"]),
+        ).order_by(
+            Synapse.community_level.desc(),  # roots first
+            Synapse.confidence.desc(),
+        )
+    )
+    synapses = list(result.scalars().all())
+
+    level_counts: dict[int, int] = {}
+    nodes: list[dict] = []
+    max_level = 0
+    for s in synapses:
+        lvl = int(s.community_level or 0)
+        max_level = max(max_level, lvl)
+        level_counts[lvl] = level_counts.get(lvl, 0) + 1
+        nodes.append({
+            "id": s.id,
+            "title": s.title,
+            "summary_plain": (s.summary_plain or "")[:600],
+            "confidence": float(s.confidence or 0.0),
+            "confidence_band": s.confidence_band,
+            "verdict": s.verdict,
+            "community_level": lvl,
+            "parent_id": s.parent_id,
+            "source_count": len(s.source_item_ids_list),
+        })
+
+    return {
+        "max_level": max_level,
+        "level_counts": {str(k): v for k, v in level_counts.items()},
+        "nodes": nodes,
+    }
+
+
 @router.get("/{project_id}/review-queue")
 async def review_queue(
     project_id: str,
