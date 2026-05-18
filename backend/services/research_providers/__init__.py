@@ -20,12 +20,18 @@ from services.research_providers.base import (
     make_snippet,
 )
 from services.research_providers.chat_history import ChatHistoryProvider
+from services.research_providers.code_graph import CodeGraphProvider
 from services.research_providers.confluence import ConfluenceProvider
 from services.research_providers.confluence_search import ConfluenceSearchProvider
 from services.research_providers.email import EmailProvider
+from services.research_providers.github import GitHubProvider
 from services.research_providers.handbook import HandbookProvider
+from services.research_providers.iq import IQProvider
+from services.research_providers.jenkins import JenkinsProvider
 from services.research_providers.jira import JiraProvider
 from services.research_providers.kb_fts import KBFtsProvider
+from services.research_providers.log_servers import LogServersProvider
+from services.research_providers.mq import MQProvider
 from services.research_providers.project_documents import ProjectDocumentsProvider
 from services.research_providers.project_notes import ProjectNotesProvider
 from services.research_providers.webex import WebexProvider
@@ -43,6 +49,12 @@ PROVIDERS: dict[str, SearchProvider] = {
     WebexProvider.key: WebexProvider(),
     JiraProvider.key: JiraProvider(),
     HandbookProvider.key: HandbookProvider(),
+    LogServersProvider.key: LogServersProvider(),
+    CodeGraphProvider.key: CodeGraphProvider(),
+    IQProvider.key: IQProvider(),
+    GitHubProvider.key: GitHubProvider(),
+    JenkinsProvider.key: JenkinsProvider(),
+    MQProvider.key: MQProvider(),
 }
 
 __all__ = [

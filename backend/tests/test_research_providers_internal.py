@@ -58,16 +58,15 @@ def _fake_tool_stream(events: list[dict]):
 # ── Registry shape ─────────────────────────────────────────────────────────
 
 
-def test_registry_now_has_all_ten_providers():
+def test_registry_has_sprint1_internal_providers():
+    """The six sprint-1 internal providers are registered. Other
+    providers may coexist (sprint-2 in test_research_providers_internal2)."""
     from services.research_providers import PROVIDERS
 
-    expected = {
-        # local
-        "kb_fts", "project_documents", "project_notes", "chat_history",
-        # internal
+    sprint1 = {
         "confluence", "confluence_search", "email", "webex", "jira", "handbook",
     }
-    assert set(PROVIDERS.keys()) == expected
+    assert sprint1.issubset(set(PROVIDERS.keys()))
 
 
 def test_internal_providers_default_off_with_correct_side_effects():
