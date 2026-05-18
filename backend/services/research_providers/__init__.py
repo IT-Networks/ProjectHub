@@ -20,15 +20,29 @@ from services.research_providers.base import (
     make_snippet,
 )
 from services.research_providers.chat_history import ChatHistoryProvider
+from services.research_providers.confluence import ConfluenceProvider
+from services.research_providers.confluence_search import ConfluenceSearchProvider
+from services.research_providers.email import EmailProvider
+from services.research_providers.handbook import HandbookProvider
+from services.research_providers.jira import JiraProvider
 from services.research_providers.kb_fts import KBFtsProvider
 from services.research_providers.project_documents import ProjectDocumentsProvider
 from services.research_providers.project_notes import ProjectNotesProvider
+from services.research_providers.webex import WebexProvider
 
 PROVIDERS: dict[str, SearchProvider] = {
+    # Tier 1 — local (always default on)
     KBFtsProvider.key: KBFtsProvider(),
     ProjectDocumentsProvider.key: ProjectDocumentsProvider(),
     ProjectNotesProvider.key: ProjectNotesProvider(),
     ChatHistoryProvider.key: ChatHistoryProvider(),
+    # Tier 2 — internal via AI-Assist (default off; per-project opt-in)
+    ConfluenceProvider.key: ConfluenceProvider(),
+    ConfluenceSearchProvider.key: ConfluenceSearchProvider(),
+    EmailProvider.key: EmailProvider(),
+    WebexProvider.key: WebexProvider(),
+    JiraProvider.key: JiraProvider(),
+    HandbookProvider.key: HandbookProvider(),
 }
 
 __all__ = [

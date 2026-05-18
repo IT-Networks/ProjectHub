@@ -187,12 +187,15 @@ def _seed_chat(project_id: str, *, count: int = 2):
 
 
 def test_registry_has_four_local_providers(initdb):
+    """The four local providers must be registered with the right defaults.
+    Other providers (Tier-2 internal, external) may coexist — this test
+    just guarantees the local quartet is intact."""
     from services.research_providers import PROVIDERS
 
-    assert set(PROVIDERS.keys()) == {
-        "kb_fts", "project_documents", "project_notes", "chat_history",
-    }
-    for p in PROVIDERS.values():
+    local_keys = {"kb_fts", "project_documents", "project_notes", "chat_history"}
+    assert local_keys.issubset(set(PROVIDERS.keys()))
+    for key in local_keys:
+        p = PROVIDERS[key]
         assert p.default_enabled is True
         assert p.typical_latency == "fast"
         assert p.side_effect == "read"
