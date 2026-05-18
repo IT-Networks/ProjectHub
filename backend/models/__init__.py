@@ -3,7 +3,10 @@ from models.todo import Todo, TodoQueue
 from models.note import Note
 from models.widget import WidgetConfig
 from models.communication import LinkedMessage
-from models.research import ResearchResult
+from models.research import (
+    ResearchResult,
+    ResearchRun, ResearchSubQuery, ResearchFinding, ProjectResearchSettings,
+)
 from models.cache import OfflineCache
 from models.knowledge import KnowledgeItem, KnowledgeEdge, ProjectDocument
 from models.source_change import SourceChange, SyncRun
@@ -20,6 +23,7 @@ __all__ = [
     "WidgetConfig",
     "LinkedMessage",
     "ResearchResult",
+    "ResearchRun", "ResearchSubQuery", "ResearchFinding", "ProjectResearchSettings",
     "OfflineCache",
     "KnowledgeItem", "KnowledgeEdge", "ProjectDocument",
     "SourceChange", "SyncRun",
