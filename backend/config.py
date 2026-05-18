@@ -46,6 +46,25 @@ class Settings(BaseSettings):
     jira_api_token: str = ""
     jira_timeout: int = 20
 
+    # ── Memory Bridge (P1) — AI-Assist ↔ ProjectHub-Brain ────────────────
+    # See ``claudedocs/bridge_openapi_20260516.yaml`` and
+    # ``claudedocs/design_memory_systems_20260516.md`` §4.
+    # ``memory_bridge_token``: optional shared-secret for the
+    # X-Memory-Bridge-Token header. Empty (default) = no auth on the bridge
+    # endpoints — acceptable for localhost/in-network use. Set via
+    # ``PROJECTHUB_MEMORY_BRIDGE_TOKEN`` for remote deployments.
+    memory_bridge_token: str = ""
+
+    # ── Brain (P2+) — embedding-aware retrieval, all default OFF ─────────
+    # Mirrors AI-Assist's ``engine_v2.*`` flags so both sides can be
+    # toggled independently without code changes.
+    brain_embedding_enabled: bool = False                  # P2
+    brain_contextual_retrieval_enabled: bool = False       # P2
+    brain_reranker_enabled: bool = False                   # P3
+    brain_hierarchical_synapses_enabled: bool = False      # P5
+    brain_incremental_update_enabled: bool = False         # P9
+    brain_bitemporal_claims_enabled: bool = False          # P10
+
     model_config = {"env_prefix": "PROJECTHUB_"}
 
 

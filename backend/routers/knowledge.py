@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import html
 import json
@@ -317,11 +318,23 @@ async def create_item(
         confidence=data.confidence,
         extra_data=json.dumps(data.metadata),
     )
+
+    # T2.5 — Brain augmentation. Both stages gated by independent flags
+    # (brain_contextual_retrieval_enabled, brain_embedding_enabled);
+    # both default OFF, so the call is a cheap no-op out of the box.
+    # ``enrich_item`` swallows every LLM/embedder failure internally so
+    # the user-facing create never crashes on a flaky upstream.
+    from services.retrieval.enrichment import enrich_item
+
+    proj_lookup = await db.execute(select(Project).where(Project.id == project_id))
+    project_obj = proj_lookup.scalar_one_or_none()
+    await enrich_item(item, project_obj)
+
     db.add(item)
     await db.commit()
     await db.refresh(item)
 
-    # Sync FTS
+    # Sync FTS (now includes context_summary in the indexed text — see _fts_insert).
     await _fts_insert(db, item)
 
     return _item_to_response(item)
@@ -342,11 +355,22 @@ async def update_item(
     if not item:
         raise HTTPException(404, "Knowledge Item nicht gefunden")
 
+    # T2.5 — Track whether the change is "semantic" (title/content). Only
+    # those edits warrant a re-enrichment + re-embed; tag-only or pin-only
+    # changes don't move the embedding meaningfully and would just burn
+    # LLM tokens.
+    semantic_changed = False
+
     if data.title is not None:
+        if data.title != item.title:
+            semantic_changed = True
         item.title = data.title
     if data.content is not None:
+        new_plain = _strip_html(data.content)
+        if new_plain != item.content_plain:
+            semantic_changed = True
         item.content = data.content
-        item.content_plain = _strip_html(data.content)
+        item.content_plain = new_plain
     if data.category is not None:
         if data.category not in VALID_CATEGORIES:
             raise HTTPException(400, f"Ungültige Kategorie. Erlaubt: {VALID_CATEGORIES}")
@@ -363,6 +387,14 @@ async def update_item(
         item.is_pinned = data.is_pinned
 
     item.updated_at = _now()
+
+    # T2.5 — Re-enrich only when title/content actually changed.
+    if semantic_changed:
+        from services.retrieval.enrichment import enrich_item
+
+        proj_lookup = await db.execute(select(Project).where(Project.id == project_id))
+        project_obj = proj_lookup.scalar_one_or_none()
+        await enrich_item(item, project_obj)
 
     if item.source_note_id:
         note_result = await db.execute(
@@ -1513,6 +1545,207 @@ async def extract_from_message(
 
 # --- Helper: Auto-link by tags ---
 
+# --- T2.6: Backfill Embeddings + Context Snippets ---
+
+
+class BackfillEmbeddingsRequest(BaseModel):
+    """Body for POST /{project_id}/backfill-embeddings.
+
+    ``force`` re-enriches items that already have a context_summary / embedding —
+    useful after a model change (clear ``embedding_model`` invariant). ``False``
+    (default) only touches items lacking one of the two pieces.
+
+    ``rate_limit_seconds`` is the inter-item sleep. 0 disables (good for
+    small projects + tests); production-grade values are 1-36s depending
+    on the LLM proxy budget.
+    """
+
+    force: bool = False
+    rate_limit_seconds: float = 0.0
+
+
+@router.post("/{project_id}/backfill-embeddings", status_code=202)
+async def backfill_embeddings(
+    project_id: str,
+    data: BackfillEmbeddingsRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Spawn a detached background task that enriches items in this project.
+
+    The task lives on its own ``async_session`` (pattern mirrors
+    ``services/synapse_pipeline.py``). Progress is broadcast via
+    ``sse_hub.emit("backfill_progress", ...)`` so the frontend can render a
+    live progress bar without polling.
+
+    Returns immediately with status=started; the caller subscribes to the
+    SSE stream for updates.
+    """
+    await _ensure_project(db, project_id)
+    force = data.force if data else False
+    rate_limit_seconds = data.rate_limit_seconds if data else 0.0
+    asyncio.create_task(
+        _run_backfill_embeddings(
+            project_id, force=force, rate_limit_seconds=rate_limit_seconds
+        )
+    )
+    return {
+        "status": "started",
+        "project_id": project_id,
+        "force": force,
+        "rate_limit_seconds": rate_limit_seconds,
+    }
+
+
+async def _run_backfill_embeddings(
+    project_id: str, *, force: bool, rate_limit_seconds: float
+) -> None:
+    """Background runner — owns its own session, never raises into the caller.
+
+    Filtering:
+        force=False → only items where ``embedding IS NULL OR context_summary = ''``
+        force=True  → ALL items
+
+    Per-item flow:
+        1. ``enrich_item(item, project)`` — context + embedding (each gated
+           by its own setting flag, so the task is a no-op when both flags
+           are off; logs WARN once and exits early in that case).
+        2. ``_fts_insert(db, item)`` — re-index with the new context_summary
+           prepended (matches the create-path behaviour).
+        3. Commit per item so partial progress survives a mid-run crash.
+        4. SSE progress event after each step.
+    """
+    from database import async_session
+    from services.retrieval.enrichment import enrich_item
+    from services.sse_hub import sse_hub
+
+    contextual_on, embedding_on = _read_brain_flags()
+    if not contextual_on and not embedding_on:
+        logger.warning(
+            "[backfill] both flags off — nothing to do (project=%s)", project_id
+        )
+        try:
+            await sse_hub.emit(
+                "backfill_progress",
+                {
+                    "project_id": project_id,
+                    "phase": "skipped",
+                    "reason": "both brain flags off",
+                },
+            )
+        except Exception:
+            pass
+        return
+
+    try:
+        async with async_session() as db:
+            proj_res = await db.execute(
+                select(Project).where(Project.id == project_id)
+            )
+            project = proj_res.scalar_one_or_none()
+            if project is None:
+                logger.warning("[backfill] project %s vanished", project_id)
+                return
+
+            q = select(KnowledgeItem).where(KnowledgeItem.project_id == project_id)
+            if not force:
+                q = q.where(
+                    or_(
+                        KnowledgeItem.embedding.is_(None),
+                        KnowledgeItem.context_summary == "",
+                    )
+                )
+            items = (await db.execute(q)).scalars().all()
+
+            stats = {
+                "total": len(items),
+                "processed": 0,
+                "skipped": 0,
+                "failed": 0,
+            }
+            await _safe_emit(
+                sse_hub,
+                "backfill_progress",
+                {"project_id": project_id, "phase": "start", **stats},
+            )
+
+            for item in items:
+                try:
+                    result = await enrich_item(item, project)
+                    if result["context_set"] or result["embedding_set"]:
+                        item.updated_at = _now()
+                        await _fts_insert(db, item)
+                        # _fts_insert commits; nothing left to do here
+                        stats["processed"] += 1
+                    else:
+                        # enrich was a no-op (both flags off in settings, OR
+                        # nothing for the LLM to ground on) — skip without
+                        # touching FTS so the row is unchanged.
+                        stats["skipped"] += 1
+                except Exception as e:  # noqa: BLE001 — one bad row mustn't kill the run
+                    logger.warning("[backfill] item %s failed: %s", item.id, e)
+                    stats["failed"] += 1
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
+
+                await _safe_emit(
+                    sse_hub,
+                    "backfill_progress",
+                    {
+                        "project_id": project_id,
+                        "phase": "step",
+                        "item_id": item.id,
+                        **stats,
+                    },
+                )
+
+                if rate_limit_seconds > 0:
+                    await asyncio.sleep(rate_limit_seconds)
+
+            await _safe_emit(
+                sse_hub,
+                "backfill_progress",
+                {"project_id": project_id, "phase": "done", **stats},
+            )
+    except Exception as e:  # pragma: no cover — task must never raise
+        logger.exception("[backfill] task crashed for project %s", project_id)
+        await _safe_emit(
+            sse_hub if "sse_hub" in dir() else None,
+            "backfill_progress",
+            {
+                "project_id": project_id,
+                "phase": "error",
+                "error": str(e)[:200],
+            },
+        )
+
+
+def _read_brain_flags() -> tuple[bool, bool]:
+    """Return ``(contextual_enabled, embedding_enabled)`` defensively."""
+    try:
+        from config import settings
+
+        return (
+            bool(getattr(settings, "brain_contextual_retrieval_enabled", False)),
+            bool(getattr(settings, "brain_embedding_enabled", False)),
+        )
+    except Exception:  # pragma: no cover
+        return (False, False)
+
+
+async def _safe_emit(sse_hub: object, event: str, payload: dict) -> None:
+    """SSE emit that never crashes the backfill task — broken hub silently ignored."""
+    if sse_hub is None:
+        return
+    try:
+        await sse_hub.emit(event, payload)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
+# --- Helper: Auto-link by tags (existing) ---
+
 async def _auto_link_by_tags(db: AsyncSession, project_id: str, new_item: KnowledgeItem):
     """Create RELATED edges to existing items with overlapping tags."""
     new_tags = set(json.loads(new_item.tags)) if new_item.tags else set()
@@ -1566,7 +1799,15 @@ def _extract_tags_from_text(text_input: str, max_tags: int = 5) -> list[str]:
 # --- FTS5 Helpers ---
 
 async def _fts_insert(db: AsyncSession, item: KnowledgeItem) -> bool:
-    """Insert item into FTS5 index. Returns True on success, False on failure (logged)."""
+    """Insert item into FTS5 index. Returns True on success, False on failure (logged).
+
+    T2.5: the indexed ``content_plain`` column on the FTS5 virtual table now
+    receives ``context_summary || '\\n\\n' || content_plain`` so that the
+    LLM-generated context snippet contributes to BM25 ranking — matches
+    the Anthropic-Contextual-Retrieval prescription without requiring a
+    DROP+REBUILD of the FTS5 table schema. The raw ``content_plain`` on
+    ``knowledge_items`` stays untouched so the UI shows what the user typed.
+    """
     try:
         # Get rowid
         result = await db.execute(
@@ -1576,13 +1817,16 @@ async def _fts_insert(db: AsyncSession, item: KnowledgeItem) -> bool:
         row = result.fetchone()
         if row:
             tags_text = " ".join(json.loads(item.tags)) if item.tags else ""
+            ctx = (item.context_summary or "").strip()
+            body = item.content_plain or ""
+            fts_content_plain = f"{ctx}\n\n{body}" if ctx else body
             await db.execute(text("""
                 INSERT OR REPLACE INTO knowledge_items_fts(rowid, title, content_plain, tags)
                 VALUES (:rowid, :title, :content_plain, :tags)
             """), {
                 "rowid": row[0],
                 "title": item.title,
-                "content_plain": item.content_plain,
+                "content_plain": fts_content_plain,
                 "tags": tags_text,
             })
             await db.commit()

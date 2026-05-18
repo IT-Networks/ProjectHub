@@ -34,6 +34,20 @@ class KnowledgeItem(Base):
     )
     sync_status: Mapped[str] = mapped_column(String(20), default="synced")  # synced, pending, conflict
     last_synced_at: Mapped[str | None] = mapped_column(String(30), nullable=True, default=None)
+    # ── Brain-embedding columns (P2, M1 migration) ──────────────────────
+    # ``context_summary`` is a 1-sentence LLM-generated context line the
+    # Anthropic-style Contextual-Retrieval pipeline writes (T2.4); the
+    # FTS5 schema picks it up as a fourth index column then. ``embedding``
+    # packs the float32 vector as a BLOB; ``embedding_model`` lets us
+    # detect model-version drift and force a re-embed.
+    context_summary: Mapped[str] = mapped_column(Text, default="")
+    embedding: Mapped[bytes | None] = mapped_column(default=None)
+    embedding_model: Mapped[str | None] = mapped_column(
+        String(120), nullable=True, default=None
+    )
+    embedded_at: Mapped[str | None] = mapped_column(
+        String(30), nullable=True, default=None
+    )
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now)
 

@@ -76,6 +76,36 @@ async def init_db():
         except Exception:
             pass
 
+        # ── M1 (P2) — Brain embedding columns ────────────────────────────
+        # Additive ALTERs; each guarded so re-runs are no-op when the column
+        # already exists. The FTS5 schema extension that adds context_summary
+        # as a fourth indexed column lives in T2.4 (Contextual Snippet
+        # Generator) — keeping schema-shape changes separate from
+        # indexing-pipeline changes is what makes this migration safe to
+        # run before any embedding-aware retrieval code lands.
+        for ddl in (
+            "ALTER TABLE knowledge_items ADD COLUMN context_summary TEXT DEFAULT ''",
+            "ALTER TABLE knowledge_items ADD COLUMN embedding BLOB",
+            "ALTER TABLE knowledge_items ADD COLUMN embedding_model TEXT",
+            "ALTER TABLE knowledge_items ADD COLUMN embedded_at TEXT",
+        ):
+            try:
+                await conn.execute(__import__("sqlalchemy").text(ddl))
+            except Exception:
+                pass  # column already exists
+
+        # Backfill-state index. Speeds up the "give me all items lacking
+        # an embedding for project X" scan that the backfill job runs
+        # at startup — without this it falls back to a table scan on
+        # every poll.
+        try:
+            await conn.execute(__import__("sqlalchemy").text(
+                "CREATE INDEX IF NOT EXISTS ix_knowledge_items_embedded "
+                "ON knowledge_items(project_id, embedded_at)"
+            ))
+        except Exception:
+            pass
+
         # Migrate: add sync-tracking fields to data_source_links (S1)
         for ddl in (
             "ALTER TABLE data_source_links ADD COLUMN last_synced_at TEXT",

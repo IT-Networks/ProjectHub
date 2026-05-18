@@ -11,6 +11,7 @@ from models.synapse import (
     KnowledgeEntity, KnowledgeEntityMention, KnowledgeEntityRelation,
     Synapse, SynapseClaim, SynapseGenerationRun, KnowledgeReviewQueue,
 )
+from models.workspace import ProjectWorkspacePath
 
 __all__ = [
     "Project", "DataSourceLink",
@@ -24,4 +25,5 @@ __all__ = [
     "SourceChange", "SyncRun",
     "KnowledgeEntity", "KnowledgeEntityMention", "KnowledgeEntityRelation",
     "Synapse", "SynapseClaim", "SynapseGenerationRun", "KnowledgeReviewQueue",
+    "ProjectWorkspacePath",
 ]

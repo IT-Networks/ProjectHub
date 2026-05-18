@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ProjectHub",
     description="Projekt- und Aufgabenverwaltung mit AI-Assist Integration",
-    version="1.3.1",
+    version="1.4.0",
     lifespan=lifespan,
 )
 
@@ -78,6 +78,7 @@ from routers.sync import router as sync_router  # noqa: E402
 from routers.project_sync import router as project_sync_router  # noqa: E402
 from routers.update import router as update_router  # noqa: E402
 from routers.ai import router as ai_router  # noqa: E402
+from routers.memory import router as memory_router  # noqa: E402
 
 app.include_router(projects_router)
 app.include_router(todos_router)
@@ -98,6 +99,7 @@ app.include_router(knowledge_router)
 app.include_router(synapse_router)
 app.include_router(update_router)
 app.include_router(ai_router)
+app.include_router(memory_router)
 
 
 # Health check
