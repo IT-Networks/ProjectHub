@@ -10,9 +10,10 @@ interface KnowledgeToolbarProps {
   projectId: string
   onAddClick: () => void
   onResearchClick: () => void
+  onSourcesClick: () => void
 }
 
-export function KnowledgeToolbar({ projectId, onAddClick, onResearchClick }: KnowledgeToolbarProps) {
+export function KnowledgeToolbar({ projectId, onAddClick, onResearchClick, onSourcesClick }: KnowledgeToolbarProps) {
   const viewMode = useKnowledgeStore((s) => s.viewMode)
   const setViewMode = useKnowledgeStore((s) => s.setViewMode)
   const filterCategory = useKnowledgeStore((s) => s.filterCategory)
@@ -119,6 +120,11 @@ export function KnowledgeToolbar({ projectId, onAddClick, onResearchClick }: Kno
           {stats.total_items} Items · {stats.total_edges} Verknüpfungen
         </Badge>
       )}
+
+      {/* Sources Button */}
+      <Button variant="ghost" onClick={onSourcesClick} size="sm" title="Wissens-Quellen konfigurieren">
+        Quellen
+      </Button>
 
       {/* Research Button */}
       <Button variant="outline" onClick={onResearchClick} size="sm">

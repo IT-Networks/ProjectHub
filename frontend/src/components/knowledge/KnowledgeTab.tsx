@@ -10,6 +10,8 @@ import { KnowledgeItemDialog } from './KnowledgeItemDialog'
 import { NodeDetailPanel } from './NodeDetailPanel'
 import { DocumentScanPanel } from './DocumentScanPanel'
 import { ResearchDialog } from './ResearchDialog'
+import { ResearchAutoBar } from './ResearchAutoBar'
+import { SourcesDialog } from './SourcesDialog'
 
 interface KnowledgeTabProps {
   projectId: string
@@ -27,6 +29,7 @@ export function KnowledgeTab({ projectId }: KnowledgeTabProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editItemId, setEditItemId] = useState<string | null>(null)
   const [researchOpen, setResearchOpen] = useState(false)
+  const [sourcesOpen, setSourcesOpen] = useState(false)
 
   useEffect(() => {
     fetchStats(projectId)
@@ -56,7 +59,17 @@ export function KnowledgeTab({ projectId }: KnowledgeTabProps) {
         docsPath={currentProject?.docs_path ?? null}
       />
 
-      <KnowledgeToolbar projectId={projectId} onAddClick={handleAdd} onResearchClick={() => setResearchOpen(true)} />
+      {/* Live-Bar for any active Auto-Mode run — renders null when idle */}
+      <div className="mb-4">
+        <ResearchAutoBar projectId={projectId} />
+      </div>
+
+      <KnowledgeToolbar
+        projectId={projectId}
+        onAddClick={handleAdd}
+        onResearchClick={() => setResearchOpen(true)}
+        onSourcesClick={() => setSourcesOpen(true)}
+      />
 
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
@@ -89,6 +102,12 @@ export function KnowledgeTab({ projectId }: KnowledgeTabProps) {
         projectId={projectId}
         open={researchOpen}
         onOpenChange={setResearchOpen}
+      />
+
+      <SourcesDialog
+        projectId={projectId}
+        open={sourcesOpen}
+        onOpenChange={setSourcesOpen}
       />
     </div>
   )
