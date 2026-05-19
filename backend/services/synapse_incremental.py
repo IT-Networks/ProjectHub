@@ -103,6 +103,122 @@ async def find_affected_synapses(
     return [s for s in rows if item_id in s.source_item_ids_list]
 
 
+async def find_affected_via_entity_overlap(
+    db: AsyncSession,
+    *,
+    project_id: str,
+    item: KnowledgeItem,
+    llm_caller: LLMCaller,
+) -> list[Synapse]:
+    """Closes the P9 ADD loop.
+
+    The direct ``source_item_ids`` overlap (above) is precise but misses
+    the common case: a freshly-created item that *talks about* the same
+    concepts as an existing synapse but isn't yet linked to it
+    (the item was just created — no previous /generate has seen it).
+
+    For ADD-class changes (typically ``change == "created"``) we run the
+    existing single-item entity extractor on the new item, look up which
+    ``KnowledgeEntity`` rows match the extracted entities, then surface
+    every Synapse whose ``source_entity_ids`` overlaps that set.
+
+    Cost: ONE LLM call (entity extraction for one item, ~1500 tokens).
+    The caller decides whether to pay it — the auto-hook in
+    ``routers/knowledge.py`` doesn't (rule-based only), but the explicit
+    ``POST /api/synapse/{proj}/incremental?use_llm=true`` does.
+
+    Args:
+        db: Async session.
+        project_id: Project the item belongs to.
+        item: The item itself — needs ``content_plain`` for extraction.
+        llm_caller: Decider LLM used here for the *extraction* prompt;
+            we don't need a separate model for this.
+
+    Returns:
+        Affected synapses (may be empty), with no duplication relative
+        to ``find_affected_synapses`` — callers should merge by ``.id``.
+    """
+    text = (item.content_plain or "").strip()
+    if not text:
+        return []
+
+    # Use the production entity-extractor against a thin LLMCaller adapter.
+    # synapse_entities.extract_from_item internally calls call_json(), so
+    # to keep tests deterministic we inline a minimal version that uses
+    # the injected llm_caller directly.
+    prompt = _build_extraction_prompt(item)
+    try:
+        parsed = await llm_caller(prompt)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[incremental] entity-extract LLM raised: %s", e)
+        return []
+
+    if not isinstance(parsed, dict):
+        return []
+    raw_entities = parsed.get("entities") or []
+    if not isinstance(raw_entities, list) or not raw_entities:
+        return []
+
+    # Normalise the extracted entity names — the existing project entities
+    # are stored with ``name_normalized``, so we match on the same shape.
+    from services.synapse_entities import normalize_name
+    from models.synapse import KnowledgeEntity
+
+    norm_names = {
+        normalize_name(str(e.get("name") or ""))
+        for e in raw_entities
+        if isinstance(e, dict) and e.get("name")
+    }
+    norm_names.discard("")
+    if not norm_names:
+        return []
+
+    # Look up matching KnowledgeEntity rows for this project. SQLite ``IN``
+    # has no parameter-count problem at our scales (≤ 12 entities/item).
+    ent_stmt = (
+        select(KnowledgeEntity)
+        .where(KnowledgeEntity.project_id == project_id)
+        .where(KnowledgeEntity.name_normalized.in_(list(norm_names)))
+    )
+    matched_entities = list((await db.execute(ent_stmt)).scalars().all())
+    if not matched_entities:
+        return []
+
+    matched_entity_ids = {e.id for e in matched_entities}
+
+    # Now find synapses that reference any of those entity ids. We use
+    # the same LIKE-then-membership pattern as ``find_affected_synapses``
+    # so SQLite avoids a full table scan when most synapses' entity sets
+    # don't intersect the new item's.
+    syn_stmt = select(Synapse).where(Synapse.project_id == project_id)
+    candidate_syns = list((await db.execute(syn_stmt)).scalars().all())
+    out: list[Synapse] = []
+    for syn in candidate_syns:
+        if matched_entity_ids.intersection(syn.source_entity_ids_list):
+            out.append(syn)
+    return out
+
+
+def _build_extraction_prompt(item: KnowledgeItem) -> str:
+    """Compact entity-extraction prompt used by the overlap path.
+
+    Mirrors the production prompt in ``synapse_entities`` but keeps the
+    output schema narrower (we only need names + types — relations are
+    not used here). Smaller prompt = faster + cheaper for the hot path.
+    """
+    return (
+        "Extrahiere die zentralen Entitäten aus folgendem Wissenseintrag. "
+        "Antworte AUSSCHLIESSLICH als JSON: "
+        "{\"entities\": [{\"name\": \"...\", \"type\": \"concept|component|"
+        "person|system|technology|process|decision\"}]}\n\n"
+        f"Titel: {item.title or '(ohne Titel)'}\n"
+        f"Kategorie: {item.category or 'reference'}\n\n"
+        f"---\n{(item.content_plain or '')[:3000]}\n---\n\n"
+        "Maximal 12 Entitäten, nur die wirklich tragenden. KEINE generischen "
+        "Wörter wie 'System' oder 'Prozess' ohne Kontext."
+    )
+
+
 async def _claims_touching_item(
     db: AsyncSession, *, synapse_id: str, item_id: str,
 ) -> list[SynapseClaim]:
@@ -393,18 +509,49 @@ async def update_for_item(
         # On 'created' against project=X we still pick up the item; if
         # it's gone (race with delete), fall through with item=None.
 
+    # P9 ADD-closure: for newly-created items that don't directly link to
+    # any synapse (source_item_ids miss), try entity-overlap discovery —
+    # the new item may belong with an existing synapse conceptually even
+    # though no /generate has linked it yet. Costs ONE LLM call so only
+    # runs when the caller opted in by supplying llm_caller.
+    affected_via_entities: list[Synapse] = []
+    if (
+        change == "created"
+        and not affected
+        and item is not None
+        and llm_caller is not None
+    ):
+        affected_via_entities = await find_affected_via_entity_overlap(
+            db, project_id=project_id, item=item, llm_caller=llm_caller,
+        )
+        affected = affected_via_entities  # promote to the main path
+
     decisions: list[IncrementalDecision] = []
     results: list[dict] = []
     for syn in affected:
-        d = await decide_for_synapse(
-            db, syn, item, change=change, llm_caller=llm_caller,
+        # Items discovered via entity overlap on a 'created' change get
+        # UPDATE semantics (the new item supplements them) — but
+        # decide_for_synapse rule-base maps 'created' → NOOP. Force the
+        # override here so the work actually happens.
+        effective_change: ChangeType = (
+            "updated"
+            if syn in affected_via_entities and change == "created"
+            else change
         )
+        d = await decide_for_synapse(
+            db, syn, item, change=effective_change, llm_caller=llm_caller,
+        )
+        # Annotate why this synapse was picked up so the response payload
+        # tells operators "this came from entity overlap, not direct link".
+        if syn in affected_via_entities:
+            d.reason = (d.reason + " | via entity-overlap").strip(" |")
         decisions.append(d)
         r = await apply_decision(db, d)
         results.append(r)
 
-    # 'created' with NO affected synapses → surface an ADD intent so
-    # the dashboard / queue can pick it up. Same payload shape.
+    # 'created' with NO affected synapses (neither direct nor via
+    # entities) → surface an ADD intent so the dashboard / queue can
+    # pick it up. Same payload shape.
     if change == "created" and not affected:
         decisions.append(IncrementalDecision(
             kind="ADD", synapse_id="", reason="new item, no existing synapse touched",

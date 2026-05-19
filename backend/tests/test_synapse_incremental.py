@@ -558,3 +558,320 @@ def test_incremental_endpoint_rejects_bad_change(client, monkeypatch):
         json={"item_id": "api0003", "change": "wibble"},
     )
     assert r.status_code == 400
+
+
+# ── P9 ADD-closure: entity-overlap discovery (v1.10) ────────────────
+
+
+def _seed_with_entities(claims_by_synapse: list[dict], extra_items: list[dict] | None = None) -> dict:
+    """Like _seed, but also seeds KnowledgeEntity rows + Synapse.source_entity_ids.
+
+    Each spec adds an ``entities`` list of (id, name, name_normalized)
+    triples; the Synapse's source_entity_ids gets those entity ids.
+    """
+    from database import async_session
+    from models import Project
+    from models.knowledge import KnowledgeItem
+    from models.synapse import KnowledgeEntity, Synapse
+
+    proj_id = _gen_id()
+    syn_ids = []
+    extra_items = extra_items or []
+
+    async def _go():
+        async with async_session() as db:
+            db.add(Project(id=proj_id, name=f"P9-ent {proj_id[:6]}", description="t"))
+
+            for spec in claims_by_synapse:
+                # Create source items
+                for iid in spec.get("source_item_ids", []):
+                    db.add(KnowledgeItem(
+                        id=iid, project_id=proj_id,
+                        title=f"I {iid}", content="", content_plain="",
+                    ))
+                # Create entities
+                entity_ids = []
+                for ent in spec.get("entities", []):
+                    db.add(KnowledgeEntity(
+                        id=ent["id"], project_id=proj_id,
+                        name=ent["name"],
+                        name_normalized=ent["name_normalized"],
+                        entity_type=ent.get("type", "concept"),
+                    ))
+                    entity_ids.append(ent["id"])
+                # Create synapse
+                syn_id = _gen_id()
+                syn_ids.append(syn_id)
+                syn = Synapse(
+                    id=syn_id, project_id=proj_id,
+                    title=spec.get("title", f"S {syn_id[:6]}"),
+                    summary="x", summary_plain="x",
+                    confidence=0.8, confidence_band="high",
+                    verdict="persist", status="validated",
+                )
+                syn.source_item_ids_list = list(spec.get("source_item_ids", []))
+                syn.source_entity_ids_list = entity_ids
+                db.add(syn)
+
+            for it in extra_items:
+                db.add(KnowledgeItem(
+                    id=it["id"], project_id=proj_id,
+                    title=it.get("title", ""),
+                    content=it.get("content", ""),
+                    content_plain=it.get("content_plain", it.get("content", "")),
+                    category=it.get("category", "reference"),
+                ))
+            await db.commit()
+
+    asyncio.get_event_loop().run_until_complete(_go())
+    return {"project_id": proj_id, "synapse_ids": syn_ids}
+
+
+def test_entity_overlap_finds_synapse_by_extracted_name(client):
+    """The new item is created in isolation but talks about an entity
+    that an existing synapse already references → overlap path picks it up."""
+    src_iid = "ent_" + secrets.token_hex(3)
+    new_iid = "ent_" + secrets.token_hex(3)
+    state = _seed_with_entities(
+        [
+            {
+                "source_item_ids": [src_iid],
+                "entities": [
+                    {
+                        "id": "ent_" + secrets.token_hex(3),
+                        "name": "OAuth2",
+                        "name_normalized": "oauth2",
+                        "type": "technology",
+                    },
+                ],
+            },
+        ],
+        extra_items=[
+            {
+                "id": new_iid,
+                "title": "Auth setup notes",
+                "content_plain": "We extended OAuth2 for SSO.",
+            },
+        ],
+    )
+
+    async def fake_llm(prompt: str):
+        # The overlap path expects a {"entities": [...]} response.
+        return {"entities": [
+            {"name": "OAuth2", "type": "technology"},
+        ]}
+
+    async def _go():
+        from database import async_session
+        from models.knowledge import KnowledgeItem
+        from services.synapse_incremental import find_affected_via_entity_overlap
+        async with async_session() as db:
+            item = await db.get(KnowledgeItem, new_iid)
+            return await find_affected_via_entity_overlap(
+                db, project_id=state["project_id"], item=item,
+                llm_caller=fake_llm,
+            )
+
+    rows = _run(_go())
+    assert len(rows) == 1
+    assert rows[0].id == state["synapse_ids"][0]
+
+
+def test_entity_overlap_returns_empty_when_no_match(client):
+    """Extracted entities exist but no synapse references them."""
+    other_iid = "iso_" + secrets.token_hex(3)
+    new_iid = "iso_" + secrets.token_hex(3)
+    state = _seed_with_entities(
+        [
+            {
+                "source_item_ids": [other_iid],
+                "entities": [
+                    {
+                        "id": "ent_" + secrets.token_hex(3),
+                        "name": "Docker",
+                        "name_normalized": "docker",
+                        "type": "technology",
+                    },
+                ],
+            },
+        ],
+        extra_items=[
+            {
+                "id": new_iid,
+                "title": "About Kubernetes",
+                "content_plain": "Kubernetes orchestration notes.",
+            },
+        ],
+    )
+
+    async def fake_llm(prompt: str):
+        return {"entities": [{"name": "Kubernetes", "type": "technology"}]}
+
+    async def _go():
+        from database import async_session
+        from models.knowledge import KnowledgeItem
+        from services.synapse_incremental import find_affected_via_entity_overlap
+        async with async_session() as db:
+            item = await db.get(KnowledgeItem, new_iid)
+            return await find_affected_via_entity_overlap(
+                db, project_id=state["project_id"], item=item,
+                llm_caller=fake_llm,
+            )
+
+    rows = _run(_go())
+    assert rows == []
+
+
+def test_entity_overlap_handles_empty_content(client):
+    """Item with no text → no LLM call, empty result."""
+    blank_iid = "blank_" + secrets.token_hex(3)
+    state = _seed_with_entities(
+        [],
+        extra_items=[
+            {"id": blank_iid, "content_plain": "   "},
+        ],
+    )
+
+    called = {"n": 0}
+    async def tracking_llm(prompt: str):
+        called["n"] += 1
+        return {"entities": []}
+
+    async def _go():
+        from database import async_session
+        from models.knowledge import KnowledgeItem
+        from services.synapse_incremental import find_affected_via_entity_overlap
+        async with async_session() as db:
+            item = await db.get(KnowledgeItem, blank_iid)
+            return await find_affected_via_entity_overlap(
+                db, project_id=state["project_id"], item=item,
+                llm_caller=tracking_llm,
+            )
+
+    rows = _run(_go())
+    assert rows == []
+    assert called["n"] == 0  # short-circuit before LLM call
+
+
+def test_entity_overlap_swallows_llm_failure(client):
+    boom_iid = "boom_" + secrets.token_hex(3)
+    state = _seed_with_entities(
+        [],
+        extra_items=[{"id": boom_iid, "content_plain": "Some text."}],
+    )
+
+    async def bad_llm(prompt: str):
+        raise RuntimeError("LLM down")
+
+    async def _go():
+        from database import async_session
+        from models.knowledge import KnowledgeItem
+        from services.synapse_incremental import find_affected_via_entity_overlap
+        async with async_session() as db:
+            item = await db.get(KnowledgeItem, boom_iid)
+            return await find_affected_via_entity_overlap(
+                db, project_id=state["project_id"], item=item,
+                llm_caller=bad_llm,
+            )
+
+    rows = _run(_go())
+    assert rows == []
+
+
+def test_orchestrator_promotes_entity_overlap_to_update(client):
+    """End-to-end: 'created' + no direct match + LLM provided → entity
+    overlap path runs, picks the synapse, decisions = UPDATE."""
+    src_iid = "or_" + secrets.token_hex(3)
+    new_iid = "or_" + secrets.token_hex(3)
+    ent_iid = "ent_" + secrets.token_hex(3)
+    state = _seed_with_entities(
+        [
+            {
+                "source_item_ids": [src_iid],
+                "entities": [
+                    {
+                        "id": ent_iid,
+                        "name": "JWT",
+                        "name_normalized": "jwt",
+                        "type": "technology",
+                    },
+                ],
+            },
+        ],
+        extra_items=[
+            {
+                "id": new_iid,
+                "title": "JWT migration notes",
+                "content_plain": "Migrated to JWT tokens.",
+            },
+        ],
+    )
+
+    async def fake_llm(prompt: str):
+        # Heuristic dispatch: the extraction prompt vs the decider prompt
+        # differ — extraction asks for "entities", decider for "decision".
+        if "JSON" in prompt and "\"entities\"" in prompt:
+            return {"entities": [{"name": "JWT", "type": "technology"}]}
+        # Decider prompt
+        return {"decision": "UPDATE", "reason": "new item supplements"}
+
+    async def _go():
+        from database import async_session
+        from services.synapse_incremental import update_for_item
+        async with async_session() as db:
+            return await update_for_item(
+                db, project_id=state["project_id"], item_id=new_iid,
+                change="created", llm_caller=fake_llm,
+            )
+
+    res = _run(_go())
+    # One synapse picked up via entity overlap
+    assert res["affected"] == 1
+    kinds = [d["kind"] for d in res["decisions"]]
+    assert "UPDATE" in kinds
+    # And the reason carries the entity-overlap annotation
+    reasons = " ".join(d["reason"] for d in res["decisions"])
+    assert "entity-overlap" in reasons
+    # No ADD-pending intent — overlap path handled it
+    assert "ADD" not in kinds
+
+
+def test_orchestrator_without_llm_falls_through_to_add(client):
+    """Same setup but no llm_caller → entity overlap is skipped → ADD intent."""
+    src_iid = "or2_" + secrets.token_hex(3)
+    new_iid = "or2_" + secrets.token_hex(3)
+    state = _seed_with_entities(
+        [
+            {
+                "source_item_ids": [src_iid],
+                "entities": [
+                    {
+                        "id": "ent_" + secrets.token_hex(3),
+                        "name": "Redis",
+                        "name_normalized": "redis",
+                        "type": "technology",
+                    },
+                ],
+            },
+        ],
+        extra_items=[
+            {
+                "id": new_iid, "title": "Redis intro",
+                "content_plain": "Using Redis for caching.",
+            },
+        ],
+    )
+
+    async def _go():
+        from database import async_session
+        from services.synapse_incremental import update_for_item
+        async with async_session() as db:
+            return await update_for_item(
+                db, project_id=state["project_id"], item_id=new_iid,
+                change="created", llm_caller=None,
+            )
+
+    res = _run(_go())
+    assert res["affected"] == 0
+    kinds = [d["kind"] for d in res["decisions"]]
+    assert kinds == ["ADD"]
