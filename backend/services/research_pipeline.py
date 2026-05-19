@@ -57,6 +57,9 @@ from services.research_planner import (
 )
 from services.research_providers import PROVIDERS, Finding, SearchProgress
 from services.sse_hub import sse_hub
+# Re-export so tests can monkeypatch ``services.research_pipeline.run_synapse_generation``
+# to a fake before the inline-synapse hook fires.
+from services.synapse_pipeline import run_synapse_generation  # noqa: F401
 
 logger = logging.getLogger("projecthub.research.pipeline")
 
@@ -117,6 +120,7 @@ _DEFAULT_PROFILES: dict[str, dict[str, Any]] = {
         "budget": _DEFAULT_NORMAL_BUDGET,
         "hard_timeout_sec": 180,
         "max_concurrent_searches": 4,
+        "auto_synthesise": False,  # Normal-Mode: cheap, no synapse follow-up
     },
     "tief": {
         "max_initial_sub_queries": 8,
@@ -131,6 +135,7 @@ _DEFAULT_PROFILES: dict[str, dict[str, Any]] = {
         "budget": _DEFAULT_TIEF_BUDGET,
         "hard_timeout_sec": 420,
         "max_concurrent_searches": 4,
+        "auto_synthesise": True,   # Tief-Mode: bundle persists into Synapses
     },
 }
 
@@ -420,9 +425,26 @@ async def _run_pipeline(
 
     # ─ Phase 5: PERSIST (grounded → KnowledgeItem) ─
     await _emit_progress(project_id, run_id, "persisting", hop=0)
-    persisted_count = await _persist_grounded_as_knowledge_items(
+    persisted_count, new_item_ids = await _persist_grounded_as_knowledge_items(
         project_id, run_id, topic, cancel,
     )
+
+    # ─ Phase 6: SYNTHESISE (Inline-Synapse, P9) ─
+    synapse_run_id: str | None = None
+    if (
+        profile.get("auto_synthesise")
+        and not cancel.is_set()
+        and persisted_count > 0
+        and budget.pressure_level() not in ("extreme", "exhausted")
+    ):
+        await _emit_progress(project_id, run_id, "synthesising", hop=0)
+        try:
+            synapse_run_id = await _trigger_inline_synapse(
+                project_id, run_id, new_item_ids,
+            )
+        except Exception as e:  # noqa: BLE001 — synapse failure mustn't kill the research run
+            logger.warning("inline synapse failed for run=%s: %s", run_id, e)
+            error_summary_parts.append(f"synapse_failed:{type(e).__name__}")
 
     # ─ Done ─
     await _emit_progress(project_id, run_id, "done", hop=0)
@@ -436,8 +458,12 @@ async def _run_pipeline(
         validated_count=grounded_count,
         persisted_count=persisted_count,
         error_summary=error_summary,
+        synapse_run_id=synapse_run_id,
     )
-    await _emit_complete(project_id, run_id, final_status, budget=budget)
+    await _emit_complete(
+        project_id, run_id, final_status,
+        budget=budget, synapse_run_id=synapse_run_id,
+    )
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────
@@ -747,15 +773,19 @@ async def _mark_finding_flagged_no_validation(fid: str, reason: str) -> None:
 
 async def _persist_grounded_as_knowledge_items(
     project_id: str, run_id: str, topic: str, cancel: asyncio.Event,
-) -> int:
+) -> tuple[int, list[str]]:
     """Promote each grounded finding to a KnowledgeItem row.
+
+    Returns ``(persisted_count, new_item_ids)`` — the second slot feeds
+    P9's auto-synthesise hook so the synapse run is correlated with the
+    items it was triggered by.
 
     Uses ``source_type="research_auto"`` so existing knowledge-router
     paths recognise these as Auto-Mode output. ``source_ref`` carries
     a stable ``research:{run}:{finding_id}`` shape for idempotency.
     """
     if cancel.is_set():
-        return 0
+        return 0, []
 
     # Lazy import — keep models.knowledge out of the module top
     # so a partial import order during test setup doesn't bite.
@@ -763,6 +793,7 @@ async def _persist_grounded_as_knowledge_items(
     import hashlib
 
     persisted = 0
+    new_item_ids: list[str] = []
     async with async_session() as db:
         findings = (
             await db.execute(
@@ -803,9 +834,10 @@ async def _persist_grounded_as_knowledge_items(
             f.status = "persisted"
             f.knowledge_item_id = item.id
             f.updated_at = _now()
+            new_item_ids.append(item.id)
             persisted += 1
         await db.commit()
-    return persisted
+    return persisted, new_item_ids
 
 
 def _band_for_confidence(score: float | None) -> str:
@@ -839,6 +871,7 @@ async def _finalise(
     validated_count: int | None = None,
     persisted_count: int | None = None,
     error_summary: str | None = None,
+    synapse_run_id: str | None = None,
 ) -> None:
     async with async_session() as db:
         run = await db.scalar(
@@ -857,8 +890,65 @@ async def _finalise(
             run.persisted_count = persisted_count
         if error_summary:
             run.error_summary = error_summary
+        if synapse_run_id is not None:
+            run.synapse_run_id = synapse_run_id
         run.token_usage_dict = budget_snapshot
         await db.commit()
+
+
+async def _trigger_inline_synapse(
+    project_id: str, research_run_id: str, new_item_ids: list[str],
+) -> str | None:
+    """Create + run a SynapseGenerationRun on the research run's new items.
+
+    Returns the synapse-run id, or ``None`` if creation failed. Runs the
+    synapse pipeline inline (awaited) — the research pipeline already
+    runs in the background, so the user's perceived "research done" point
+    correctly waits for synapses to land.
+
+    The synapse pipeline is project-wide in v1 (Risk note in spec §13);
+    ``scope_item_ids`` is passed as a metadata hint that lets the operator
+    correlate the synapse run with the research run that triggered it.
+    """
+    from models.synapse import SynapseGenerationRun
+
+    # Look up via globals() each call so a monkeypatch on
+    # ``services.research_pipeline.run_synapse_generation`` (rebound at
+    # module top) takes effect immediately.
+    synapse_runner = globals()["run_synapse_generation"]
+
+    # Short-circuit: a synapse run is already in flight for this project.
+    # The user would normally see "already_running" from the manual route;
+    # for the inline trigger we silently skip rather than fail the research run.
+    async with async_session() as db:
+        running = await db.scalar(
+            select(SynapseGenerationRun)
+            .where(SynapseGenerationRun.project_id == project_id)
+            .where(SynapseGenerationRun.status == "running")
+        )
+        if running is not None:
+            logger.info(
+                "inline synapse skipped: project=%s already has run=%s in flight",
+                project_id, running.id,
+            )
+            return None
+
+        synapse_run = SynapseGenerationRun(
+            id=_gen_id(),
+            project_id=project_id,
+            trigger="auto_research",
+            status="running",
+            phase="extracting_entities",
+        )
+        db.add(synapse_run)
+        await db.commit()
+        synapse_run_id = synapse_run.id
+
+    await synapse_runner(
+        project_id, synapse_run_id,
+        scope_item_ids=new_item_ids,
+    )
+    return synapse_run_id
 
 
 async def _finalise_with_error(run_id: str, error: str) -> None:
@@ -941,10 +1031,12 @@ async def _emit_finding(
 
 
 async def _emit_complete(
-    project_id: str, run_id: str, status: str, *, budget: BudgetTracker,
+    project_id: str, run_id: str, status: str, *,
+    budget: BudgetTracker,
+    synapse_run_id: str | None = None,
 ) -> None:
     snapshot = budget.snapshot()
-    await sse_hub.emit("research_complete", {
+    payload = {
         "project_id": project_id,
         "run_id": run_id,
         "status": status,
@@ -953,4 +1045,7 @@ async def _emit_complete(
             "max_pressure_reached": snapshot["max_pressure_reached"],
         },
         "token_usage": snapshot,
-    })
+    }
+    if synapse_run_id is not None:
+        payload["synapse_run_id"] = synapse_run_id
+    await sse_hub.emit("research_complete", payload)

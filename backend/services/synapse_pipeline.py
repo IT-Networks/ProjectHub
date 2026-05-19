@@ -74,11 +74,27 @@ async def _emit(project_id: str, run_id: str, phase: str, **extra) -> None:
     })
 
 
-async def run_synapse_generation(project_id: str, run_id: str) -> None:
+async def run_synapse_generation(
+    project_id: str,
+    run_id: str,
+    *,
+    scope_item_ids: list[str] | None = None,
+) -> None:
     """Background entrypoint — owns its own session, never raises.
 
     The caller (the trigger route) has already created the
     ``SynapseGenerationRun`` row in status ``running``.
+
+    Args:
+        project_id: project to synthesise.
+        run_id: pre-created ``SynapseGenerationRun.id``.
+        scope_item_ids: optional list of newly-persisted KnowledgeItem ids
+            from a Research-Auto-Mode run. Stored in the run's metadata so
+            the operator can see *why* the synthesis was triggered. Behaviour
+            is still project-wide in v1 — a future P9.1 may use this hint
+            to do an incremental synthesis (skip clearing entities, fold the
+            scope items into the existing graph instead). Passing it now
+            costs nothing and unblocks the link from the Research Pipeline.
     """
     async with async_session() as db:
         run = await db.scalar(
@@ -87,6 +103,17 @@ async def run_synapse_generation(project_id: str, run_id: str) -> None:
         if run is None:
             logger.warning("synapse run %s vanished before start", run_id)
             return
+
+        # Persist the scope hint into the run's token_usage JSON so the
+        # operator can correlate this synapse run with the upstream
+        # research run later. We piggyback on the existing JSON column
+        # rather than adding a schema field for an v1-hint-only feature.
+        if scope_item_ids:
+            usage = run.token_usage_dict
+            usage["scope_item_ids"] = list(scope_item_ids)[:200]
+            usage["triggered_by"] = "research_auto"
+            run.token_usage_dict = usage
+            await db.commit()
 
         try:
             # --- Phase: extract entities (clean rebuild first) ---
