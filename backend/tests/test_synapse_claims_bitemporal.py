@@ -232,9 +232,11 @@ def test_supersede_claims_full_regen_closes_all_old(client):
 
 def test_supersede_claims_partial_path_leaves_others_alone(client):
     """Targeting only_claim_ids closes those rows; untargeted current rows stay current."""
+    keep_id = "keep_" + secrets.token_hex(3)
+    repl_id = "repl_" + secrets.token_hex(3)
     proj, syn, ids = _make_synapse_and_claims(client, [
-        {"claim_text": "Keep me", "id": "keep0001"},
-        {"claim_text": "Replace me", "id": "repl0001"},
+        {"claim_text": "Keep me", "id": keep_id},
+        {"claim_text": "Replace me", "id": repl_id},
     ])
 
     import asyncio as _aio
@@ -251,7 +253,7 @@ def test_supersede_claims_partial_path_leaves_others_alone(client):
             ]
             outcome = await supersede_claims(
                 db, synapse_id=syn, new_claims=new_rows,
-                only_claim_ids=["repl0001"],
+                only_claim_ids=[repl_id],
             )
             await db.commit()
             currents = await current_claims(db, syn)
@@ -267,13 +269,14 @@ def test_supersede_claims_partial_path_leaves_others_alone(client):
 def test_supersede_claim_by_id_blocks_double_supersede(client):
     """A claim that's already been closed can't be superseded again."""
     base = datetime.now(timezone.utc)
+    old_id = "old_" + secrets.token_hex(3)
     proj, syn, ids = _make_synapse_and_claims(client, [
         {
             "claim_text": "Already superseded",
             "valid_from": _iso(base - timedelta(days=10)),
             "valid_to": _iso(base - timedelta(days=5)),
             "superseded_by": "ghost_id",
-            "id": "old00001",
+            "id": old_id,
         },
     ])
 
@@ -288,7 +291,7 @@ def test_supersede_claim_by_id_blocks_double_supersede(client):
                 id=_gen_id(), synapse_id=syn, claim_text="Attempted replacement",
             )
             return await supersede_claim_by_id(
-                db, old_claim_id="old00001", new_claim=new,
+                db, old_claim_id=old_id, new_claim=new,
             )
 
     res = _aio.get_event_loop().run_until_complete(_go())
