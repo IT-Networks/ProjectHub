@@ -41,6 +41,56 @@ def _strip_html(html_text: str) -> str:
     return text_content
 
 
+def _schedule_incremental_update(
+    project_id: str, item_id: str, change: str,
+) -> None:
+    """Fire-and-forget the P9 incremental synapse update for an item change.
+
+    Gated by ``settings.brain_incremental_update_enabled`` — when off, this
+    is a zero-cost no-op so the create/update/delete request path stays at
+    its existing latency. We open a SHORT-LIVED async session inside the
+    task because the FastAPI-injected session is already closed by the
+    time the task runs.
+
+    Defensive: any failure inside the task is logged but never re-raised —
+    the user-visible CRUD operation has already committed by the time we
+    get here, so an incremental-update glitch is purely background.
+    """
+    try:
+        from config import settings as _cfg
+        if not getattr(_cfg, "brain_incremental_update_enabled", False):
+            return
+    except Exception:
+        return
+
+    async def _run() -> None:
+        try:
+            from database import async_session
+            from services.synapse_incremental import update_for_item
+
+            async with async_session() as sess:
+                await update_for_item(
+                    sess,
+                    project_id=project_id,
+                    item_id=item_id,
+                    change=change,  # type: ignore[arg-type]
+                    llm_caller=None,  # rule-based by default in the hook
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[incremental] hook failed (project=%s item=%s change=%s): %s",
+                project_id, item_id, change, exc,
+            )
+
+    try:
+        asyncio.get_event_loop().create_task(_run())
+    except RuntimeError:
+        # No running loop — usually means we're outside FastAPI (tests
+        # that drive the function directly). Caller can re-invoke the
+        # orchestrator synchronously when they need it.
+        pass
+
+
 def _markdown_to_html(md_text: str) -> str:
     """Convert synthesized Markdown to HTML for the rich-text ``content`` field.
 
@@ -337,6 +387,12 @@ async def create_item(
     # Sync FTS (now includes context_summary in the indexed text — see _fts_insert).
     await _fts_insert(db, item)
 
+    # P9 — fire-and-forget incremental synapse update. For 'created' the
+    # rule layer produces no per-synapse work (no existing synapse references
+    # a brand-new item); the orchestrator surfaces an ADD intent for the
+    # dashboard. Cheap when no synapses exist for the project yet.
+    _schedule_incremental_update(project_id, item.id, "created")
+
     return _item_to_response(item)
 
 
@@ -420,6 +476,12 @@ async def update_item(
     # Sync FTS
     await _fts_update(db, item)
 
+    # P9 — fire-and-forget incremental update on semantic edits. Tag-only
+    # or pin-only changes don't move the synapse-claim grounding, so we
+    # don't burn cycles on them.
+    if semantic_changed:
+        _schedule_incremental_update(project_id, item.id, "updated")
+
     return _item_to_response(item)
 
 
@@ -457,6 +519,14 @@ async def delete_item(
 
     await db.delete(item)
     await db.commit()
+
+    # P9 — fire-and-forget incremental update so any synapse that sourced
+    # this item is closed (DELETE) or has its dependent claims invalidated
+    # (UPDATE) in the bi-temporal layer. Order matters: we commit the
+    # KnowledgeItem deletion first so the orchestrator's db.get returns
+    # None (its 'deleted' path doesn't need the body).
+    _schedule_incremental_update(project_id, item_id, "deleted")
+
     return {"success": True}
 
 

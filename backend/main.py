@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ProjectHub",
     description="Projekt- und Aufgabenverwaltung mit AI-Assist Integration",
-    version="1.8.0",
+    version="1.9.0",
     lifespan=lifespan,
 )
 

@@ -277,6 +277,70 @@ async def get_run(
     return _run_to_response(run)
 
 
+# --- Incremental updates (P9) -----------------------------------------------
+
+
+class IncrementalRequest(BaseModel):
+    """Trigger an incremental update for one KnowledgeItem.
+
+    ``change`` matches the change-type the orchestrator expects:
+    ``created`` / ``updated`` / ``deleted``.
+    """
+    item_id: str
+    change: str = "updated"
+    use_llm: bool = False
+
+
+@router.post("/{project_id}/incremental")
+async def incremental_update(
+    project_id: str,
+    body: IncrementalRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Run the Mem0-style incremental update for one item.
+
+    Looks up synapses that source this item, decides per-synapse
+    (rule-based by default; LLM-decider when ``use_llm=true`` and the
+    feature flag is on), and applies via the bi-temporal helpers.
+
+    Gated by ``settings.brain_incremental_update_enabled``. When off the
+    endpoint returns a 503 with a hint so the operator knows what to
+    flip.
+    """
+    from config import settings as cfg
+
+    if not getattr(cfg, "brain_incremental_update_enabled", False):
+        raise HTTPException(
+            503,
+            "Inkrementelle Updates sind deaktiviert. Setze "
+            "brain_incremental_update_enabled=True in config.",
+        )
+    if body.change not in {"created", "updated", "deleted"}:
+        raise HTTPException(
+            400,
+            f"change muss 'created' / 'updated' / 'deleted' sein, nicht {body.change!r}",
+        )
+    await _ensure_project(db, project_id)
+
+    from services.synapse_incremental import update_for_item
+
+    llm_caller = None
+    if body.use_llm:
+        # Wrap the existing JSON-LLM helper as the decider callable.
+        async def _llm(prompt: str):
+            res = await call_json(prompt, session_prefix="synapse-incremental")
+            return res.parsed if res.ok else None
+        llm_caller = _llm
+
+    return await update_for_item(
+        db,
+        project_id=project_id,
+        item_id=body.item_id,
+        change=body.change,  # type: ignore[arg-type]
+        llm_caller=llm_caller,
+    )
+
+
 # --- Synapses ---------------------------------------------------------------
 
 @router.get("/{project_id}/synapses")
