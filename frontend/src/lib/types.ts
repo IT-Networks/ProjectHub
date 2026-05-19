@@ -545,3 +545,157 @@ export const RUN_PHASE_LABELS: Record<RunPhase, string> = {
   validating: 'Validieren',
   done: 'Fertig',
 }
+
+
+// === Research Auto-Mode (P10/P11) ===
+
+export type ResearchDepth = 'normal' | 'tief'
+export type ResearchMode = 'auto' | 'single'
+export type ResearchRunStatus = 'running' | 'ok' | 'partial' | 'error' | 'cancelled'
+export type ResearchRunPhase =
+  | 'planning'
+  | 'searching'
+  | 'extracting'
+  | 'lateral'
+  | 'validating'
+  | 'persisting'
+  | 'synthesising'
+  | 'done'
+
+export type ResearchFindingStatus =
+  | 'candidate'
+  | 'grounded'
+  | 'flagged'
+  | 'rejected'
+  | 'persisted'
+  | 'failed'
+  | 'cancelled'
+  | 'blocked'
+
+export interface ResearchProvider {
+  key: string
+  description: string
+  typical_latency: 'fast' | 'medium' | 'slow'
+  side_effect: 'read' | 'external'
+  default_enabled: boolean
+  enabled: boolean
+}
+
+export interface ResearchProviderHealth {
+  key: string
+  ok: boolean
+  detail: string
+  last_checked_at: string
+}
+
+export interface ResearchSettings {
+  default_depth: ResearchDepth
+  enabled_providers: string[]
+  provider_settings: Record<string, Record<string, unknown>>
+  routing_hints: string
+  updated_at: string
+}
+
+export interface ResearchSettingsUpdate {
+  default_depth?: ResearchDepth
+  enabled_providers?: string[]
+  provider_settings?: Record<string, Record<string, unknown>>
+  routing_hints?: string
+}
+
+export interface ResearchRunSummary {
+  id: string
+  project_id: string
+  topic: string
+  depth: ResearchDepth
+  mode: ResearchMode
+  status: ResearchRunStatus
+  phase: ResearchRunPhase
+  current_hop: number
+  sub_query_count: number
+  finding_count: number
+  validated_count: number
+  persisted_count: number
+  flagged_count: number
+  rejected_count: number
+  synapse_run_id: string | null
+  started_at: string
+  finished_at: string | null
+}
+
+export interface ResearchFinding {
+  id: string
+  sub_query_id: string
+  provider_key: string
+  source_ref: string
+  title: string
+  snippet: string
+  url: string | null
+  timestamp: string | null
+  author: string | null
+  status: ResearchFindingStatus
+  confidence: number | null
+  knowledge_item_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ResearchSubQuery {
+  id: string
+  hop: number
+  is_lateral: boolean
+  question: string
+  providers: string[]
+  rationale: string
+  priority: number
+  relevance_score: number | null
+  entity_focus: string | null
+  parent_finding_ids: string[]
+  status: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface ResearchRunDetail {
+  run: ResearchRunSummary
+  sub_queries: ResearchSubQuery[]
+  findings: ResearchFinding[]
+  token_usage: Record<string, unknown>
+}
+
+export interface ResearchStartRunRequest {
+  topic: string
+  depth?: ResearchDepth
+  mode?: ResearchMode
+}
+
+export interface ResearchStartRunResponse {
+  run_id: string
+  started: boolean
+  depth: ResearchDepth
+  reason?: string
+}
+
+export const RESEARCH_DEPTH_LABELS: Record<ResearchDepth, string> = {
+  normal: 'Normal',
+  tief: 'Tief (links und rechts schauen)',
+}
+
+export const RESEARCH_RUN_STATUS_LABELS: Record<ResearchRunStatus, string> = {
+  running: 'Läuft',
+  ok: 'Erfolg',
+  partial: 'Teilergebnis',
+  error: 'Fehler',
+  cancelled: 'Abgebrochen',
+}
+
+export const RESEARCH_RUN_PHASE_LABELS: Record<ResearchRunPhase, string> = {
+  planning: 'Planung',
+  searching: 'Suche',
+  extracting: 'Extraktion',
+  lateral: 'Lateral-Hop',
+  validating: 'Validierung',
+  persisting: 'Speichern',
+  synthesising: 'Synthese',
+  done: 'Fertig',
+}
